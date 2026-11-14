@@ -135,6 +135,32 @@ export class TaskSpaces implements SpaceHost {
     return this.list().filter((space) => space.profile.id === profileId);
   }
 
+  running(profile: Profile): boolean {
+    return this.backend(profile.kernel).running(profile.id);
+  }
+
+  /** Apply an edited profile; a kernel it no longer uses lets go of it. */
+  async update(profile: Profile): Promise<void> {
+    for (const [kernel, backend] of this.#backends) {
+      if (kernel === profile.kernel) await backend.update(profile);
+      else await backend.release(profile.id);
+    }
+  }
+
+  /** Close a profile's windows and stop its kernel, keeping its data. */
+  async release(profileId: string): Promise<void> {
+    for (const backend of this.#backends.values()) {
+      await backend.release(profileId);
+    }
+  }
+
+  /** Forget everything any kernel stored for a profile. */
+  async erase(profileId: string): Promise<void> {
+    for (const backend of this.#backends.values()) {
+      await backend.erase(profileId);
+    }
+  }
+
   async stop(): Promise<void> {
     await Promise.allSettled(
       [...this.#backends.values()].map((backend) => backend.stop()),

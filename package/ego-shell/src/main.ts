@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
 
 import { AgentApi } from "./agent-api.js";
+import { ApostateBackend } from "./apostate-backend.js";
 import { startAgentServer, type AgentServer } from "./agent-server.js";
 import { ProfileRuntime } from "./profile-runtime.js";
 import {
@@ -46,6 +47,10 @@ async function main(): Promise<void> {
   const spaces = new TaskSpaces(notifyManager);
   const electron = new ElectronBackend(runtime, spaces, APP_ROOT);
   spaces.register("electron", electron);
+  spaces.register(
+    "apostate",
+    new ApostateBackend({ dataDir: userData, host: spaces }),
+  );
 
   const openManager = () => {
     if (manager && !manager.isDestroyed()) {
@@ -88,6 +93,7 @@ async function main(): Promise<void> {
   serve("profiles:list", () =>
     profiles.list().map((profile) => ({
       ...redactProfile(profile),
+      running: spaces.running(profile),
       openSpaces: spaces.ofProfile(profile.id).map((space) => ({
         id: space.id,
         name: space.name,
@@ -99,7 +105,7 @@ async function main(): Promise<void> {
     const profile = id
       ? await profiles.update(id, draft)
       : await profiles.create(draft);
-    await spaces.backend(profile.kernel).update(profile);
+    await spaces.update(profile);
     notifyManager();
     return redactProfile(profile);
   });
@@ -107,10 +113,12 @@ async function main(): Promise<void> {
     if (spaces.ofProfile(id).length > 0) {
       throw new ProfileInputError("Close this profile's windows first");
     }
-    const profile = profiles.get(id);
     await profiles.remove(id);
-    if (profile) await spaces.backend(profile.kernel).erase(id);
+    await spaces.erase(id);
     notifyManager();
+  });
+  serve("profiles:stop", async ({ id }) => {
+    await spaces.release(id);
   });
   serve("profiles:open", async ({ id }) => {
     const profile = profiles.get(id);

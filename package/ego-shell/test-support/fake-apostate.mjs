@@ -2,7 +2,8 @@
 // Stands in for the Apostate binary: it records how it was started, takes the
 // profile directory's lock and announces a debugging port the way Chromium does.
 // FAKE_APOSTATE_MODE picks a failure: "exit" quits before announcing the port,
-// "silent" never announces it, "stubborn" ignores SIGTERM.
+// "silent" never announces it, "stubborn" ignores SIGTERM. "cdp" serves a
+// debugging socket that answers like a browser.
 import { hostname } from "node:os";
 import { rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -25,7 +26,14 @@ const lock = path.join(userDataDir, "SingletonLock");
 rmSync(lock, { force: true });
 symlinkSync(`${hostname()}-${process.pid}`, lock);
 
-if (mode !== "silent") {
+if (mode === "cdp") {
+  const { startFakeBrowser } = await import("./fake-cdp-browser.mjs");
+  const browser = await startFakeBrowser();
+  writeFileSync(
+    path.join(userDataDir, "DevToolsActivePort"),
+    `${browser.port}\n/devtools/browser/fake`,
+  );
+} else if (mode !== "silent") {
   writeFileSync(
     path.join(userDataDir, "DevToolsActivePort"),
     "9222\n/devtools/browser/fake-id",

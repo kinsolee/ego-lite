@@ -5,6 +5,7 @@ const REQUESTS = new Set([
   "profiles:save",
   "profiles:remove",
   "profiles:open",
+  "profiles:stop",
   "space:command",
 ]);
 const EVENTS = new Set(["profiles:changed", "space:state"]);
