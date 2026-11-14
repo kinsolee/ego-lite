@@ -46,6 +46,8 @@ export interface RoutedSpace {
   createTab(url: string): Promise<RoutedTab>;
   closeTab(targetId: string): Promise<void>;
   activateTab(targetId: string): Promise<void>;
+  /** Bring titles and URLs up to date when the kernel does not announce them. */
+  refreshTabs?(): Promise<void>;
 }
 
 type CdpRequest = {
@@ -210,6 +212,9 @@ export class CdpClient {
     method: string,
     params: Record<string, unknown>,
   ): Promise<Outcome> {
+    if (method === "Target.getTargets" || method === "Target.getTargetInfo") {
+      await this.#space.refreshTabs?.();
+    }
     const tabs = this.#space.tabs();
     const targetId = String(params.targetId ?? "");
     const tab = tabs.find((candidate) => candidate.targetId === targetId);

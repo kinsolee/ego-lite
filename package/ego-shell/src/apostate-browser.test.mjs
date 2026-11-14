@@ -260,6 +260,35 @@ test("a closed tab ends its sessions, and a new attach recovers", async (t) => {
   assert.match(again.result.sessionId, /^[0-9A-F]{32}$/);
 });
 
+test("a title set after the page loaded is reported when tabs are read", async (t) => {
+  const { chromium, browser } = await setup(t);
+  const space = await browser.createSpace("orders", "agent");
+  const [tab] = space.tabs();
+  const agent = connect(space);
+  await agent.call("Target.setDiscoverTargets", { discover: true });
+
+  chromium.retitle(tab.targetId, "Pedido de teste");
+  assert.notEqual(tab.targetInfo().title, "Pedido de teste");
+  const announcedBefore = agent.events("Target.targetInfoChanged").length;
+
+  const listed = await agent.call("Target.getTargets");
+  assert.deepEqual(
+    listed.result.targetInfos.map((info) => info.title),
+    ["Pedido de teste"],
+  );
+  assert.deepEqual(
+    agent
+      .events("Target.targetInfoChanged")
+      .slice(announcedBefore)
+      .map((event) => event.params.targetInfo.title),
+    ["Pedido de teste"],
+  );
+
+  chromium.retitle(tab.targetId, "Pedido enviado");
+  await space.refreshTabs();
+  assert.equal(tab.targetInfo().title, "Pedido enviado");
+});
+
 test("a popup joins the space of the page that opened it", async (t) => {
   const { chromium, browser } = await setup(t);
   const space = await browser.createSpace("orders", "agent");

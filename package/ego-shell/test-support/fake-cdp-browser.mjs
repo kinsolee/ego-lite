@@ -74,6 +74,8 @@ export async function startFakeBrowser() {
         activeWindow = windowId;
         return { targetId: addTarget({ url: params.url, windowId }) };
       }
+      case "Target.getTargets":
+        return { targetInfos: [...targets.values()].map(({ info }) => info) };
       case "Target.getTargetInfo": {
         const target = targets.get(params.targetId);
         if (!target) throw new Error("No target with given id found");
@@ -173,6 +175,10 @@ export async function startFakeBrowser() {
     },
     closePage: removeTarget,
     /** A prerendered page takes the place of the page on screen. */
+    /** A page sets its title after loading; Chromium announces nothing. */
+    retitle(targetId, title) {
+      targets.get(targetId).info.title = title;
+    },
     activatePrerender(targetId) {
       const { info } = targets.get(targetId);
       delete info.subtype;

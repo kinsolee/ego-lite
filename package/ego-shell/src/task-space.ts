@@ -35,6 +35,8 @@ export abstract class TaskSpace implements RoutedSpace {
   /** Show the user where the agent is about to act, in viewport CSS pixels. */
   abstract highlightMouse(x: number, y: number): Promise<void>;
   abstract close(): Promise<void>;
+  /** Bring titles and URLs up to date when the kernel does not announce them. */
+  async refreshTabs(): Promise<void> {}
   /** Undo what an agent left switched on in the pages, such as dialog interception. */
   protected abstract releaseAgentState(): void;
   /** The space's name, owner, agent state or tabs changed. */

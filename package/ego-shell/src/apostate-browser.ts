@@ -259,6 +259,10 @@ export class ApostateSpace extends TaskSpace {
     this.publish();
   }
 
+  override refreshTabs(): Promise<void> {
+    return this.#browser.refreshTabs();
+  }
+
   async highlightMouse(x: number, y: number): Promise<void> {
     await this.#active?.highlight(x, y);
   }
@@ -424,6 +428,24 @@ export class ApostateBrowser {
     await this.#connection.send("Target.activateTarget", {
       targetId: tab.targetId,
     });
+  }
+
+  /**
+   * Chromium announces a tab's title only when it navigates, so a title the
+   * page sets afterwards has to be asked for.
+   */
+  async refreshTabs(): Promise<void> {
+    const reply = await this.#connection
+      .send("Target.getTargets")
+      .catch(() => undefined);
+    for (const info of (reply?.targetInfos ?? []) as ChromiumTarget[]) {
+      const tab = this.#tabs.get(info.targetId);
+      if (!tab) continue;
+      const { title, url } = tab.targetInfo();
+      if (title === info.title && url === info.url) continue;
+      tab.update(info);
+      tab.space.tabChanged(tab);
+    }
   }
 
   changed(): void {

@@ -53,6 +53,9 @@ export class AgentApi implements AgentHandlers {
           })),
         };
       case "listTaskSpaces":
+        await Promise.all(
+          this.#spaces.list().map((space) => space.refreshTabs()),
+        );
         return {
           taskSpaces: this.#spaces.list().map((space) => ({
             taskId: space.name,
@@ -88,6 +91,7 @@ export class AgentApi implements AgentHandlers {
         return { ...tab.targetInfo(), url };
       }
       case "listTabs": {
+        await space.refreshTabs();
         const active = space.activeTab();
         return {
           tabs: space.tabs().map((tab, index) => {
