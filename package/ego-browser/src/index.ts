@@ -16,7 +16,9 @@ import {
   resetSink,
 } from "./output-sink.js";
 import { runMain } from "./run.js";
+import { connectShellEgo, type ShellConnection } from "./shell-client.js";
 import { installStaleEgoBrowserGuard } from "./skill-migration.js";
+import { state } from "./state.js";
 import { emitUpdateNotice } from "./update-notice.js";
 import { installPageContextGuard } from "./page-context-guard.js";
 import { disposeDownloadArtifacts } from "./driver/downloads.js";
@@ -144,13 +146,27 @@ export function installEgoSdk(
 }
 
 if (isDirectCli()) {
+  let shell: ShellConnection | undefined;
   try {
+    // The standalone CLI has no native bindings of its own; a running
+    // ego-shell supplies them.
+    if (!(globalThis as InstallTarget).ego) {
+      shell = await connectShellEgo();
+      if (shell) {
+        (globalThis as InstallTarget).ego = shell.ego;
+        // Page labels are stored per browser instance. The CLI's parent is
+        // whichever shell launched this round, so name the instance after
+        // ego-shell itself or the labels would not survive to the next round.
+        state.browserHostPid = shell.hostPid;
+      }
+    }
     process.exitCode = await runMain();
   } catch (error) {
     console.error(error?.stack || error?.message || String(error));
     process.exitCode = 1;
   } finally {
     disposeDownloadArtifacts();
+    shell?.close();
   }
 } else {
   installEgoSdk();

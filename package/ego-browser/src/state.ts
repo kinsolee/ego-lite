@@ -16,6 +16,8 @@ export const state = {
   preferredTargetId: null,
   // Last observed Network domain state on the default session (tracked in cdp()).
   networkDomainEnabled: false,
+  // Process id of the browser host when it is not this process's parent.
+  browserHostPid: null,
 };
 
 export function setOverrides(overrides) {

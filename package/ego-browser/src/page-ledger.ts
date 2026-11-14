@@ -9,6 +9,7 @@ import {
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { runtimeStateDir } from "./env.js";
+import { state } from "./state.js";
 import {
   validatePageRefState,
   type PageRefState,
@@ -86,7 +87,9 @@ class LedgerLockedError extends Error {
 type LedgerFile = { seq: number; path: string };
 
 /** Stable across Agent rounds and Node-service restarts in one Ego Lite run. */
-export function runtimeInstanceId(parentPid = process.ppid): string {
+export function runtimeInstanceId(
+  parentPid = state.browserHostPid ?? process.ppid,
+): string {
   return `browser-host:${parentPid}`;
 }
 
