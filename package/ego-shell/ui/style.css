@@ -81,9 +81,23 @@ select {
 .profile .name {
   font-weight: 600;
 }
+.profile .details {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.profile .status,
+.profile .space {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+.badge.running {
+  border-color: #16a34a;
+  color: #16a34a;
+}
 .profile .actions {
-  grid-row: 1 / span 3;
-  grid-column: 2;
   display: flex;
   gap: 6px;
   align-items: start;

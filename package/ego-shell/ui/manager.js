@@ -3,6 +3,7 @@ const form = document.getElementById("profile-form");
 const formTitle = document.getElementById("form-title");
 const formError = document.getElementById("form-error");
 const proxyFields = ["host", "port", "username", "password"];
+const kernelNames = { electron: "Built in", apostate: "Apostate" };
 
 /** Id of the profile being edited, or null while creating one. */
 let editingId = null;
@@ -31,6 +32,15 @@ function syncProxyFields() {
   for (const name of proxyFields) form.elements[name].disabled = disabled;
 }
 
+function syncKernelFields() {
+  // An Apostate persona decides its own user agent.
+  const apostate = form.elements.kernel.value === "apostate";
+  form.elements.userAgent.disabled = apostate;
+  form.elements.userAgent.placeholder = apostate
+    ? "Set by the Apostate persona"
+    : "Default for this browser";
+}
+
 function edit(profile) {
   editingId = profile?.id ?? null;
   formTitle.textContent = profile ? `Edit ${profile.name}` : "New profile";
@@ -39,6 +49,7 @@ function edit(profile) {
   if (profile) {
     const { proxy, fingerprint } = profile;
     form.elements.name.value = profile.name;
+    form.elements.kernel.value = profile.kernel;
     form.elements.scheme.value = proxy.scheme;
     form.elements.host.value = proxy.host ?? "";
     form.elements.port.value = proxy.port ?? "";
@@ -53,6 +64,7 @@ function edit(profile) {
     form.elements.password.placeholder = "";
   }
   syncProxyFields();
+  syncKernelFields();
 }
 
 function draft() {
@@ -61,6 +73,7 @@ function draft() {
   const password = form.elements.password.value;
   return {
     name: value("name"),
+    kernel: value("kernel"),
     proxy:
       scheme === "none"
         ? { scheme }
@@ -86,27 +99,60 @@ async function refresh() {
     ...profiles.map((profile) => {
       const row = element("div", "profile");
       row.dataset.profileId = profile.id;
-      row.append(
+      const details = element("div", "details");
+      details.append(
         element("div", "name", profile.name),
         element("div", "muted", describeProxy(profile.proxy)),
         element(
           "div",
           "muted",
-          `${profile.fingerprint.locale} · ${profile.fingerprint.timezone}` +
-            (profile.openSpaces.length
-              ? ` · ${profile.openSpaces.length} open`
-              : ""),
+          `${profile.fingerprint.locale} · ${profile.fingerprint.timezone}`,
         ),
       );
+      const status = element("div", "status");
+      status.append(
+        element("span", "badge", kernelNames[profile.kernel]),
+        element(
+          "span",
+          profile.running ? "badge running" : "badge",
+          profile.running ? "Running" : "Stopped",
+        ),
+      );
+      details.append(status);
+      for (const space of profile.openSpaces) {
+        const line = element("div", "space");
+        line.dataset.spaceId = space.id;
+        line.append(
+          element("span", "", `${space.id} · ${space.name}`),
+          element(
+            "span",
+            space.ownership === "agent" ? "badge agent" : "badge",
+            space.ownership === "agent" ? "Agent in control" : "You control",
+          ),
+        );
+        details.append(line);
+      }
       const actions = element("div", "actions");
-      const open = element("button", "primary", "Open");
+      const open = element(
+        "button",
+        "primary",
+        profile.running ? "New window" : "Start",
+      );
       open.dataset.action = "open";
       open.onclick = () =>
         run(() => request("profiles:open", { id: profile.id }));
+      actions.append(open);
+      if (profile.running) {
+        const stop = element("button", "", "Stop");
+        stop.dataset.action = "stop";
+        stop.onclick = () =>
+          run(() => request("profiles:stop", { id: profile.id }));
+        actions.append(stop);
+      }
       const change = element("button", "", "Edit");
       change.dataset.action = "edit";
       change.onclick = () => edit(profile);
-      actions.append(open, change);
+      actions.append(change);
       if (!profile.isDefault) {
         const remove = element("button", "", "Delete");
         remove.dataset.action = "delete";
@@ -117,7 +163,7 @@ async function refresh() {
         };
         actions.append(remove);
       }
-      row.append(actions);
+      row.append(details, actions);
       return row;
     }),
   );
@@ -133,6 +179,7 @@ async function run(action) {
 }
 
 form.elements.scheme.onchange = syncProxyFields;
+form.elements.kernel.onchange = syncKernelFields;
 document.getElementById("form-reset").onclick = () => edit(null);
 form.onsubmit = (event) => {
   event.preventDefault();

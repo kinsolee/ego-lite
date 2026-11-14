@@ -20,6 +20,13 @@
         <form id="profile-form" autocomplete="off">
           <label>Name <input name="name" required /></label>
           <label
+            >Kernel
+            <select name="kernel">
+              <option value="electron">Built in</option>
+              <option value="apostate">Apostate (own fingerprint)</option>
+            </select>
+          </label>
+          <label
             >Proxy
             <select name="scheme">
               <option value="none">No proxy</option>
