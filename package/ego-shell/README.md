@@ -1,14 +1,17 @@
 # ego-shell
 
-An Electron browser shell that gives `ego-browser` isolated, proxied browser
-profiles. Each profile has its own cookies, storage and cache, and can send all
-of its traffic through its own SOCKS5 or HTTP proxy, with or without a username
-and password. Agents drive it through the unchanged `ego-browser` harness.
+A browser shell that gives `ego-browser` isolated, proxied browser profiles.
+Each profile has its own cookies, storage and cache, and can send all of its
+traffic through its own SOCKS5 or HTTP proxy, with or without a username and
+password. Agents drive it through the unchanged `ego-browser` harness.
 
-It runs on stock Electron. Fingerprint patches belong to a custom Chromium
-build that is not part of this package. The shell already hands every renderer
-its profile's seed as `--ego-fp-seed=<seed>` so that build has something to
-read.
+A profile runs on one of two kernels:
+
+- **Built in** is the shell's own Electron. Locale, timezone and user agent are
+  overridden; canvas, WebGL, audio and fonts are the host's own.
+- **Apostate** is a Chromium build with a seeded fingerprint. The shell starts
+  one Apostate process per profile and drives it over CDP. Its windows are
+  ordinary browser windows, separate from the shell.
 
 ## Run
 
@@ -18,14 +21,32 @@ npm install
 npm start
 ```
 
-The window that opens lists the profiles. Add one, then press Open to get a
-browser window for it. The toolbar has back, forward, reload, an address bar,
-tabs, and a button that takes control back from an agent.
+The window that opens manages the profiles: add or edit one, pick its kernel,
+and press Start. A running profile shows its task spaces and who controls each
+one. New window opens another window of the profile, and Stop closes all of
+them.
 
 Data lives in Electron's `userData` directory (`~/Library/Application
 Support/ego-shell` on macOS). Set `EGO_SHELL_USER_DATA` to use another
 directory. `profiles.json` there holds the profiles, including proxy passwords
 in plain text, readable only by the owner.
+
+## Install the Apostate kernel
+
+The shell does not download the kernel. Extract
+`apostate-155.0.8059.31-macos-arm64.zip` (Apostate 0.5.1) into
+`<userData>/kernels/155.0.8059.31/`, so that
+`kernels/155.0.8059.31/Chromium.app` exists. Before the first Apostate profile
+of a run starts, the shell compares the browser binary and its framework with
+the SHA-256 values pinned in `src/kernel.ts` and refuses a build that differs.
+
+`EGO_SHELL_APOSTATE_BIN` names a binary to run instead. That binary is not
+checked.
+
+Only macOS on Apple silicon is listed, and the persona is always macOS: a
+Windows persona on a Mac is flagged as tampering. Apostate is GPL-3.0. The
+shell runs the published binary as a separate process and does not link or
+modify it.
 
 ## Drive it from the harness
 
@@ -47,34 +68,73 @@ The CLI reads `agent-endpoint.json` from the shell's `userData` directory. Set
 directory. When the variable is set, a shell that cannot be reached is an
 error. A browser that provides its own `globalThis.ego` is never replaced.
 
-A task space is one shell window bound to one profile.
+A task space is one window bound to one profile. On the built-in kernel it is
+a shell window with a toolbar. On Apostate it is a window of the profile's
+Apostate process. On either kernel the spaces of one profile share cookies.
+
+## Who controls a window
+
+`task.handOff()` gives a space to the user and pauses the agent's commands on
+it until `takeOverTaskSpace(id)`. On Apostate the user takes part by using the
+window itself. A window the user opens, from the manager or from the browser's
+own menu, becomes a task space the user owns, named after the profile. An
+agent can take it over by id.
 
 ## How a profile's traffic reaches its proxy
 
 Chromium cannot authenticate to a SOCKS5 proxy. For each running profile the
 shell starts a relay on `127.0.0.1` that accepts plain SOCKS5 and forwards to
-the profile's real proxy with its credentials (`src/proxy-relay.ts`). The
-profile's session is pointed at that relay with a fixed proxy configuration and
-no bypass, so loopback addresses go through the proxy as well. Host names are
-passed on unresolved, so the proxy does the DNS lookup. When the proxy cannot
-be reached, requests fail. They do not fall back to a direct connection.
+the profile's real proxy with its credentials (`src/proxy-relay.ts`). Host
+names are passed on unresolved, so the proxy does the DNS lookup. When the
+proxy cannot be reached, requests fail. They do not fall back to a direct
+connection.
+
+The built-in kernel points the profile's session at the relay with a fixed
+proxy configuration and no bypass. Apostate is started with
+`--proxy-server=socks5://127.0.0.1:<relay port>`, so the proxy's host, user
+name and password never appear in its arguments or environment. Two more flags
+close the gaps Chromium leaves: `--proxy-bypass-list=<-loopback>` sends
+loopback addresses through the proxy as well, and `--host-resolver-rules`
+fails every lookup the browser would do on the host.
 
 WebRTC is limited to proxied transports (`disable_non_proxied_udp`), so a page
 cannot learn the machine's own addresses through ICE.
+
+## What an Apostate profile is started with
+
+Each profile has its own `--user-data-dir` under
+`<userData>/apostate-profiles/<profile id>`. Its seed, locale and timezone
+come from the profile: `--fingerprint=<seed>`, `--fingerprint-platform=macos`,
+`--fingerprint-locale`, `--fingerprint-timezone`, and `TZ` in the process
+environment. `--fingerprint-noise` is left off because sites that look for
+anti-detect browsers recognise it. The port is `--remote-debugging-port=0`,
+read back from `DevToolsActivePort`. A kernel left over from a crashed shell is
+stopped before the profile starts again.
+
+The shell enables no CDP domain on the session an agent drives. The mouse
+highlight is drawn by the browser's overlay on a second session, so the page's
+DOM is untouched.
 
 ## Layout
 
 - `src/profile-store.ts` holds the profiles on disk.
 - `src/proxy-config.ts` and `src/proxy-relay.ts` turn a profile's proxy into a
   session proxy configuration and a local relay.
-- `src/profile-runtime.ts` owns the Electron session of each running profile.
-- `src/spaces.ts` and `src/tab.ts` own windows and tabs.
+- `src/task-space.ts` holds what both kernels share: ownership, agent
+  connections and the list of spaces.
+- `src/profile-runtime.ts`, `src/spaces.ts` and `src/tab.ts` are the built-in
+  kernel: one Electron session per profile, windows and tabs.
+- `src/kernel.ts` finds and checks the Apostate binary.
+  `src/apostate-launcher.ts` starts and stops one process.
+  `src/browser-cdp.ts` and `src/apostate-browser.ts` drive its windows and tabs
+  over one browser-level CDP socket. `src/apostate-backend.ts` keeps one
+  process per running profile.
 - `src/agent-server.ts` serves the agent socket. `src/agent-api.ts` implements
   the bindings of `docs/native-bindings-api.md` on top of it.
-- `src/cdp-router.ts` gives each agent its own CDP sessions over the tabs'
-  `webContents.debugger`.
+- `src/cdp-router.ts` gives each agent its own CDP sessions over a space's
+  tabs, whichever kernel they belong to.
 - `src/snapshot.ts` renders the page snapshot the harness reads.
-- `ui/` is the profile manager and the window toolbar.
+- `ui/` is the profile manager and the toolbar of built-in windows.
 
 ## Test
 
@@ -84,15 +144,23 @@ npm test
 
 The tests run against `dist/`. `test-support/fake-proxies.mjs` provides SOCKS5
 and HTTP proxies that require credentials and log every connection.
+`test-support/fake-apostate.mjs` and `test-support/fake-cdp-browser.mjs` stand
+in for the kernel binary and its CDP endpoint.
 
 ## Known limits
 
 - Proxy passwords are stored in plain text in `profiles.json`.
 - The relay accepts any local process that finds its port.
-- Downloads and permission prompts have no UI. Permissions other than
-  fullscreen, pointer lock and clipboard write are denied.
-- `animationHighlightMouseToPosition` succeeds without drawing anything, and
-  the snapshot option `includeActionMarks` is ignored.
-- Locale, timezone and user agent are overridden through the debugger. Canvas,
-  WebGL, audio, fonts and ClientRects are the host's own until the patched
-  kernel lands.
+- Built-in kernel: downloads and permission prompts have no UI, and
+  permissions other than fullscreen, pointer lock and clipboard write are
+  denied. `animationHighlightMouseToPosition` succeeds without drawing
+  anything. Canvas, WebGL, audio, fonts and ClientRects are the host's own.
+- Apostate: a profile's `userAgent` is ignored, since the kernel supplies its
+  own. Editing a running profile's proxy, seed, locale or timezone stops its
+  process and closes its windows; it starts with the new settings the next
+  time it is started or a task space is opened on it. The active tab is the
+  one last opened or activated through the shell; a tab the user picks in the
+  tab strip is not reported. An agent's browser-level commands are answered
+  by the shell, which knows only the `Target.*` ones: `Browser.*` commands
+  such as `Browser.setDownloadBehavior` fail as not found.
+- The snapshot option `includeActionMarks` is ignored.
