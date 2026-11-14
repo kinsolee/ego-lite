@@ -18,6 +18,17 @@ export type ChildTarget = {
   targetInfo: TargetInfo;
 };
 
+/**
+ * How a kernel attaches to a tab's out-of-process frames. They start paused so
+ * the kernel can finish setting them up before any of their script runs.
+ */
+export const IFRAME_AUTO_ATTACH = {
+  autoAttach: true,
+  waitForDebuggerOnStart: true,
+  flatten: true,
+  filter: [{ type: "iframe" }],
+};
+
 export interface RoutedTab {
   readonly targetId: string;
   targetInfo(): TargetInfo;

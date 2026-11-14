@@ -1,6 +1,11 @@
 import { WebContentsView, type Session, type WebContents } from "electron";
 
-import type { ChildTarget, RoutedTab, TargetInfo } from "./cdp-router.js";
+import {
+  IFRAME_AUTO_ATTACH,
+  type ChildTarget,
+  type RoutedTab,
+  type TargetInfo,
+} from "./cdp-router.js";
 import type { UserAgentOverride } from "./fingerprint.js";
 
 export type TabOverrides = {
@@ -24,13 +29,6 @@ export type TabEvents = {
 };
 
 // Only iframes are attached: workers share the frame's process-wide overrides.
-const AUTO_ATTACH = {
-  autoAttach: true,
-  waitForDebuggerOnStart: true,
-  flatten: true,
-  filter: [{ type: "iframe" }],
-};
-
 /** One browser tab of a profile: a web view plus the CDP session that drives it. */
 export class Tab implements RoutedTab {
   readonly view: WebContentsView;
@@ -197,7 +195,7 @@ export class Tab implements RoutedTab {
     await this.#emulate(undefined);
     await this.webContents.debugger.sendCommand(
       "Target.setAutoAttach",
-      AUTO_ATTACH,
+      IFRAME_AUTO_ATTACH,
     );
   }
 
@@ -236,7 +234,7 @@ export class Tab implements RoutedTab {
     const dbg = this.webContents.debugger;
     await this.#emulate(sessionId);
     await dbg
-      .sendCommand("Target.setAutoAttach", AUTO_ATTACH, sessionId)
+      .sendCommand("Target.setAutoAttach", IFRAME_AUTO_ATTACH, sessionId)
       .catch(() => {});
     await dbg
       .sendCommand("Runtime.runIfWaitingForDebugger", {}, sessionId)
