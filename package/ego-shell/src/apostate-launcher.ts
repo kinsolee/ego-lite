@@ -1,0 +1,196 @@
+import { execFile, spawn } from "node:child_process";
+import { mkdir, readFile, readlink, rm } from "node:fs/promises";
+import path from "node:path";
+
+export type KernelLaunch = {
+  executable: string;
+  /** Owned by one profile; the kernel keeps cookies and storage here. */
+  userDataDir: string;
+  seed: string;
+  locale: string;
+  timezone: string;
+  /** Port of the profile's relay on 127.0.0.1; absent for a direct profile. */
+  proxyPort?: number;
+  env?: NodeJS.ProcessEnv;
+  startTimeoutMs?: number;
+  stopTimeoutMs?: number;
+};
+
+export type RunningKernel = {
+  pid: number;
+  /** Browser-level CDP websocket. */
+  endpoint: string;
+  /** Settles when the process is gone, however it ended. */
+  exited: Promise<void>;
+  stop(): Promise<void>;
+};
+
+export class KernelLaunchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "KernelLaunchError";
+  }
+}
+
+const PORT_FILE = "DevToolsActivePort";
+const LOCK_FILE = "SingletonLock";
+const POLL_MS = 50;
+
+/**
+ * The persona is fixed to macOS: a Windows persona on a Mac is flagged as
+ * tampering. --fingerprint-noise is left off because sites that look for
+ * anti-detect browsers recognise it.
+ */
+export function apostateArguments(launch: KernelLaunch): string[] {
+  const args = [
+    `--user-data-dir=${launch.userDataDir}`,
+    "--remote-debugging-port=0",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--no-startup-window",
+    `--fingerprint=${launch.seed}`,
+    "--fingerprint-platform=macos",
+    `--fingerprint-locale=${launch.locale}`,
+    `--fingerprint-timezone=${launch.timezone}`,
+    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+  ];
+  if (launch.proxyPort !== undefined) {
+    args.push(
+      `--proxy-server=socks5://127.0.0.1:${launch.proxyPort}`,
+      // Names are resolved by the proxy; this stops every other lookup on the host.
+      "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
+    );
+  }
+  return args;
+}
+
+export async function launchApostate(
+  launch: KernelLaunch,
+): Promise<RunningKernel> {
+  const { userDataDir } = launch;
+  const stopTimeoutMs = launch.stopTimeoutMs ?? 5_000;
+  await mkdir(userDataDir, { recursive: true, mode: 0o700 });
+  await reapOrphan(userDataDir, stopTimeoutMs);
+  await rm(path.join(userDataDir, PORT_FILE), { force: true });
+
+  const child = spawn(launch.executable, apostateArguments(launch), {
+    env: { ...(launch.env ?? process.env), TZ: launch.timezone },
+    stdio: "ignore",
+  });
+  let outcome: string | undefined;
+  const exited = new Promise<void>((resolve) => {
+    child.once("error", (error) => {
+      outcome = error.message;
+      resolve();
+    });
+    child.once("exit", (code, signal) => {
+      outcome = signal ? `was ended by ${signal}` : `exited with code ${code}`;
+      resolve();
+    });
+  });
+
+  const stop = async (): Promise<void> => {
+    if (outcome === undefined) child.kill("SIGTERM");
+    if (await settles(exited, stopTimeoutMs)) return;
+    child.kill("SIGKILL");
+    await exited;
+  };
+
+  const deadline = Date.now() + (launch.startTimeoutMs ?? 30_000);
+  for (;;) {
+    const endpoint = await readEndpoint(userDataDir);
+    if (endpoint) return { pid: child.pid!, endpoint, exited, stop };
+    if (outcome !== undefined) {
+      throw new KernelLaunchError(
+        `Apostate ${outcome} before opening its debugging port`,
+      );
+    }
+    if (Date.now() > deadline) {
+      await stop();
+      throw new KernelLaunchError(
+        "Apostate did not open its debugging port in time",
+      );
+    }
+    await delay(POLL_MS);
+  }
+}
+
+async function readEndpoint(userDataDir: string): Promise<string | undefined> {
+  let text: string;
+  try {
+    text = await readFile(path.join(userDataDir, PORT_FILE), "utf8");
+  } catch {
+    return undefined;
+  }
+  const [port, browserPath] = text.split("\n");
+  if (!/^\d+$/.test(port ?? "") || !browserPath?.startsWith("/"))
+    return undefined;
+  return `ws://127.0.0.1:${port}${browserPath}`;
+}
+
+/**
+ * A kernel outlives a shell that was killed, and a second one started on the
+ * same directory would hand over to it and exit. Chromium records its owner as
+ * a SingletonLock link to "<host>-<pid>".
+ */
+async function reapOrphan(
+  userDataDir: string,
+  timeoutMs: number,
+): Promise<void> {
+  let owner: string;
+  try {
+    owner = await readlink(path.join(userDataDir, LOCK_FILE));
+  } catch {
+    return;
+  }
+  const pid = Number(owner.slice(owner.lastIndexOf("-") + 1));
+  if (!Number.isInteger(pid) || pid <= 1 || !isAlive(pid)) return;
+  // The pid may have been reused by an unrelated process since the lock was written.
+  if (!(await commandLine(pid)).includes(userDataDir)) return;
+  process.kill(pid, "SIGTERM");
+  if (await dies(pid, timeoutMs)) return;
+  process.kill(pid, "SIGKILL");
+  await dies(pid, timeoutMs);
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function commandLine(pid: number): Promise<string> {
+  return new Promise((resolve) => {
+    execFile(
+      "ps",
+      ["-ww", "-p", String(pid), "-o", "command="],
+      (_error, stdout) => resolve(stdout),
+    );
+  });
+}
+
+async function dies(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (isAlive(pid)) {
+    if (Date.now() > deadline) return false;
+    await delay(POLL_MS);
+  }
+  return true;
+}
+
+function settles(promise: Promise<void>, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    void promise.then(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
