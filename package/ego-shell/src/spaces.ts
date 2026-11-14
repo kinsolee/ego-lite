@@ -2,12 +2,16 @@ import path from "node:path";
 
 import { BrowserWindow, type WebContents } from "electron";
 
-import { CdpClient, type RoutedSpace } from "./cdp-router.js";
-import type { LiveProfile } from "./profile-runtime.js";
+import type { LiveProfile, ProfileRuntime } from "./profile-runtime.js";
+import type { Profile } from "./profile-store.js";
 import { describeProxy } from "./proxy-config.js";
 import { Tab, type TabEvents } from "./tab.js";
-
-export type Owner = "agent" | "user";
+import {
+  TaskSpace,
+  type KernelBackend,
+  type Owner,
+  type SpaceHost,
+} from "./task-space.js";
 
 export type SpaceState = {
   spaceId: number;
@@ -47,26 +51,23 @@ function typedUrl(input: string): string {
   return `${local ? "http" : "https"}://${text}`;
 }
 
-/** A task space: one window of tabs that all belong to one profile. */
-export class Space implements RoutedSpace {
+/** A task space on the Electron kernel: a shell window with a tab strip. */
+export class Space extends TaskSpace {
   readonly window: BrowserWindow;
-  ownership: Owner;
-  agentState = "";
   readonly #live: LiveProfile;
   readonly #tabs: Tab[] = [];
-  readonly #clients = new Set<CdpClient>();
   readonly #onChange: () => void;
   #active?: Tab;
 
   constructor(
-    readonly id: number,
-    public name: string,
-    readonly createdBy: Owner,
+    id: number,
+    name: string,
+    createdBy: Owner,
     live: LiveProfile,
     ui: UiFiles,
     onChange: () => void,
   ) {
-    this.ownership = createdBy;
+    super(id, name, createdBy);
     this.#live = live;
     this.#onChange = onChange;
     this.window = new BrowserWindow({
@@ -81,11 +82,11 @@ export class Space implements RoutedSpace {
       },
     });
     this.window.on("resize", () => this.#layout());
-    this.window.webContents.on("did-finish-load", () => this.#publish());
+    this.window.webContents.on("did-finish-load", () => this.publish());
     void this.window.loadFile(ui.chromePage);
   }
 
-  get profile() {
+  get profile(): Profile {
     return this.#live.profile;
   }
 
@@ -122,46 +123,18 @@ export class Space implements RoutedSpace {
     const tab = this.#tab(targetId);
     if (!tab) return;
     this.#activate(tab);
-    this.#publish();
+    this.publish();
   }
 
-  /** Open a CDP view of this space for one agent connection. */
-  connect(emit: (message: string) => void): CdpClient {
-    const client = new CdpClient(this, emit);
-    this.#clients.add(client);
-    return client;
-  }
-
-  disconnect(client: CdpClient): void {
-    this.#clients.delete(client);
-    if (this.#clients.size === 0) this.#releaseAgentState();
-  }
-
-  setOwnership(owner: Owner): void {
-    this.ownership = owner;
-    if (owner === "user") {
-      this.agentState = "";
-      this.#releaseAgentState();
-    }
-    this.#publish();
-  }
-
-  setAgentState(state: string): void {
-    this.agentState = state;
-    this.#publish();
-  }
-
-  rename(name: string): void {
-    this.name = name;
-    this.#publish();
-  }
+  /** Stock Electron has no overlay to draw on; the patched kernel does. */
+  async highlightMouse(): Promise<void> {}
 
   /** Apply the profile's edited locale, timezone and user agent to open tabs. */
   async refreshOverrides(): Promise<void> {
     await Promise.all(
       this.#tabs.map((tab) => tab.applyOverrides(this.#live.overrides)),
     );
-    this.#publish();
+    this.publish();
   }
 
   async command(command: ChromeCommand): Promise<void> {
@@ -212,7 +185,7 @@ export class Space implements RoutedSpace {
     };
   }
 
-  close(): void {
+  async close(): Promise<void> {
     if (!this.window.isDestroyed()) this.window.destroy();
   }
 
@@ -223,19 +196,19 @@ export class Space implements RoutedSpace {
 
   readonly #tabEvents: TabEvents = {
     cdpEvent: (tab, method, params, childSessionId) => {
-      for (const client of this.#clients) {
+      for (const client of this.clients) {
         client.tabEvent(tab, method, params, childSessionId);
       }
     },
     changed: (tab) => {
-      for (const client of this.#clients) client.tabChanged(tab);
-      this.#publish();
+      for (const client of this.clients) client.tabChanged(tab);
+      this.publish();
     },
     destroyed: (tab) => {
       const index = this.#tabs.indexOf(tab);
       if (index < 0) return;
       this.#tabs.splice(index, 1);
-      for (const client of this.#clients) client.tabDestroyed(tab);
+      for (const client of this.clients) client.tabDestroyed(tab);
       if (this.window.isDestroyed()) return;
       this.window.contentView.removeChildView(tab.view);
       if (this.#active === tab) {
@@ -243,7 +216,7 @@ export class Space implements RoutedSpace {
         const next = this.#tabs[Math.min(index, this.#tabs.length - 1)];
         if (next) this.#activate(next);
       }
-      this.#publish();
+      this.publish();
     },
     popup: (opener, view) => {
       const { profile, overrides } = this.#live;
@@ -273,8 +246,8 @@ export class Space implements RoutedSpace {
     this.#tabs.push(tab);
     this.window.contentView.addChildView(tab.view);
     this.#activate(tab);
-    for (const client of this.#clients) client.tabCreated(tab);
-    this.#publish();
+    for (const client of this.clients) client.tabCreated(tab);
+    this.publish();
   }
 
   #activate(tab: Tab): void {
@@ -295,11 +268,11 @@ export class Space implements RoutedSpace {
     });
   }
 
-  #releaseAgentState(): void {
+  protected releaseAgentState(): void {
     for (const tab of this.#tabs) void tab.releaseAgentState();
   }
 
-  #publish(): void {
+  protected publish(): void {
     if (this.window.isDestroyed()) return;
     this.window.setTitle(`${this.profile.name} · ${this.name}`);
     this.window.webContents.send("space:state", this.state());
@@ -307,61 +280,76 @@ export class Space implements RoutedSpace {
   }
 }
 
-/** Every open task space, addressed by the numeric id agents use. */
-export class SpaceRegistry {
-  readonly #spaces = new Map<number, Space>();
+/** Runs profiles in Electron sessions and shows them in shell windows. */
+export class ElectronBackend implements KernelBackend {
+  readonly #runtime: ProfileRuntime;
+  readonly #host: SpaceHost;
   readonly #ui: UiFiles;
-  readonly #onChange: () => void;
-  #nextId = 1;
+  readonly #spaces = new Set<Space>();
 
-  constructor(appRoot: string, onChange: () => void) {
+  constructor(runtime: ProfileRuntime, host: SpaceHost, appRoot: string) {
+    this.#runtime = runtime;
+    this.#host = host;
     this.#ui = {
       chromePage: path.join(appRoot, "ui", "chrome.html"),
       preload: path.join(appRoot, "dist", "preload.cjs"),
     };
-    this.#onChange = onChange;
   }
 
-  async open(
-    name: string,
-    createdBy: Owner,
-    live: LiveProfile,
-  ): Promise<Space> {
-    const id = this.#nextId++;
+  async open(name: string, createdBy: Owner, profile: Profile): Promise<Space> {
+    const live = await this.#runtime.start(profile);
     const space = new Space(
-      id,
+      this.#host.allocateId(),
       name,
       createdBy,
       live,
       this.#ui,
-      this.#onChange,
+      () => this.#host.changed(),
     );
-    this.#spaces.set(id, space);
+    this.#spaces.add(space);
+    this.#host.add(space);
     space.window.once("closed", () => {
-      this.#spaces.delete(id);
+      this.#spaces.delete(space);
       space.dispose();
-      this.#onChange();
+      this.#host.remove(space);
     });
     await space.createTab("about:blank");
     return space;
   }
 
-  get(id: number): Space | undefined {
-    return this.#spaces.get(id);
+  running(profileId: string): boolean {
+    return this.#ofProfile(profileId).length > 0;
   }
 
-  list(): Space[] {
-    return [...this.#spaces.values()];
+  async update(profile: Profile): Promise<void> {
+    if (!(await this.#runtime.update(profile))) return;
+    await Promise.all(
+      this.#ofProfile(profile.id).map((space) => space.refreshOverrides()),
+    );
+  }
+
+  async release(profileId: string): Promise<void> {
+    await Promise.all(this.#ofProfile(profileId).map((space) => space.close()));
+    await this.#runtime.release(profileId);
+  }
+
+  async erase(profileId: string): Promise<void> {
+    await Promise.all(this.#ofProfile(profileId).map((space) => space.close()));
+    await this.#runtime.erase(profileId);
+  }
+
+  stop(): Promise<void> {
+    return this.#runtime.stop();
   }
 
   forChrome(contents: WebContents): Space | undefined {
-    return this.list().find(
+    return [...this.#spaces].find(
       (space) =>
         !space.window.isDestroyed() && space.window.webContents === contents,
     );
   }
 
-  ofProfile(profileId: string): Space[] {
-    return this.list().filter((space) => space.profile.id === profileId);
+  #ofProfile(profileId: string): Space[] {
+    return [...this.#spaces].filter((space) => space.profile.id === profileId);
   }
 }

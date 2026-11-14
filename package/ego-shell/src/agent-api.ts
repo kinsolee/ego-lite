@@ -4,10 +4,9 @@ import {
   type AgentHandlers,
 } from "./agent-server.js";
 import type { CdpClient } from "./cdp-router.js";
-import type { ProfileRuntime } from "./profile-runtime.js";
 import { DEFAULT_PROFILE_ID, type ProfileStore } from "./profile-store.js";
 import { captureSnapshot, type SnapshotOptions } from "./snapshot.js";
-import type { Space, SpaceRegistry } from "./spaces.js";
+import type { TaskSpace, TaskSpaces } from "./task-space.js";
 
 // The only reason key this shell produces; the harness maps it to guidance.
 const USER_CONTROL_REASON = "manual_takeover";
@@ -22,19 +21,16 @@ function invalid(message: string): EgoError {
  */
 export class AgentApi implements AgentHandlers {
   readonly #profiles: ProfileStore;
-  readonly #runtime: ProfileRuntime;
-  readonly #spaces: SpaceRegistry;
+  readonly #spaces: TaskSpaces;
   readonly #version: string;
   readonly #clients = new Map<number, Map<number, CdpClient>>();
 
   constructor(options: {
     profiles: ProfileStore;
-    runtime: ProfileRuntime;
-    spaces: SpaceRegistry;
+    spaces: TaskSpaces;
     version: string;
   }) {
     this.#profiles = options.profiles;
-    this.#runtime = options.runtime;
     this.#spaces = options.spaces;
     this.#version = options.version;
   }
@@ -124,7 +120,7 @@ export class AgentApi implements AgentHandlers {
         });
       }
       case "closeTaskSpace":
-        space.close();
+        await space.close();
         return `${space.id} task space closed.`;
       case "completeTaskSpace":
         space.setOwnership("user");
@@ -142,6 +138,7 @@ export class AgentApi implements AgentHandlers {
         if (typeof args[0] !== "number" || typeof args[1] !== "number") {
           throw invalid("animationHighlightMouseToPosition expects x and y");
         }
+        await space.highlightMouse(args[0], args[1]);
         return `${space.id} mouse highlight shown.`;
       default:
         throw new EgoError(
@@ -156,7 +153,7 @@ export class AgentApi implements AgentHandlers {
     spaceId: number | undefined,
     message: string,
   ): void {
-    let space: Space;
+    let space: TaskSpace;
     try {
       space = this.#controlled(spaceId);
     } catch (error) {
@@ -195,8 +192,7 @@ export class AgentApi implements AgentHandlers {
     if (!profile) {
       throw new EgoError("Profile not found", "EGO_PROFILE_NOT_FOUND");
     }
-    const live = await this.#runtime.start(profile);
-    const space = await this.#spaces.open(name, "agent", live);
+    const space = await this.#spaces.open(name, "agent", profile);
     return { taskId: space.name, id: space.id, name: space.name };
   }
 
@@ -217,7 +213,7 @@ export class AgentApi implements AgentHandlers {
     return { taskId: space.name, id: space.id, name: space.name };
   }
 
-  #selected(spaceId: number | undefined): Space {
+  #selected(spaceId: number | undefined): TaskSpace {
     if (spaceId === undefined || spaceId === null) {
       throw new EgoError(
         "Task space not selected",
@@ -234,7 +230,7 @@ export class AgentApi implements AgentHandlers {
     return space;
   }
 
-  #controlled(spaceId: number | undefined): Space {
+  #controlled(spaceId: number | undefined): TaskSpace {
     const space = this.#selected(spaceId);
     if (space.ownership !== "agent") {
       throw new EgoError(USER_CONTROL_REASON, "EGO_TASK_SPACE_USER_IN_CONTROL");

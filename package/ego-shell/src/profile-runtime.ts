@@ -74,6 +74,14 @@ export class ProfileRuntime {
     return entry;
   }
 
+  /** Stop the profile's relay; its session data stays on disk. */
+  async release(profileId: string): Promise<void> {
+    await this.#starting.get(profileId)?.catch(() => {});
+    const entry = this.#entries.get(profileId);
+    this.#entries.delete(profileId);
+    await entry?.relay?.close();
+  }
+
   /** Stop the profile and erase everything its session stored. */
   async erase(profileId: string): Promise<void> {
     await this.#starting.get(profileId)?.catch(() => {});

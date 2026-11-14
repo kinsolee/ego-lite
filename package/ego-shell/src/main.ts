@@ -11,7 +11,8 @@ import {
   ProfileStore,
   redactProfile,
 } from "./profile-store.js";
-import { SpaceRegistry, type ChromeCommand } from "./spaces.js";
+import { ElectronBackend, type ChromeCommand } from "./spaces.js";
+import { TaskSpaces } from "./task-space.js";
 
 const APP_ROOT = path.resolve(import.meta.dirname, "..");
 const UI_BASE = pathToFileURL(path.join(APP_ROOT, "ui")).href;
@@ -42,7 +43,9 @@ async function main(): Promise<void> {
       manager.webContents.send("profiles:changed");
     }
   };
-  const spaces = new SpaceRegistry(APP_ROOT, notifyManager);
+  const spaces = new TaskSpaces(notifyManager);
+  const electron = new ElectronBackend(runtime, spaces, APP_ROOT);
+  spaces.register("electron", electron);
 
   const openManager = () => {
     if (manager && !manager.isDestroyed()) {
@@ -96,11 +99,7 @@ async function main(): Promise<void> {
     const profile = id
       ? await profiles.update(id, draft)
       : await profiles.create(draft);
-    if (await runtime.update(profile)) {
-      await Promise.all(
-        spaces.ofProfile(profile.id).map((space) => space.refreshOverrides()),
-      );
-    }
+    await spaces.backend(profile.kernel).update(profile);
     notifyManager();
     return redactProfile(profile);
   });
@@ -108,29 +107,25 @@ async function main(): Promise<void> {
     if (spaces.ofProfile(id).length > 0) {
       throw new ProfileInputError("Close this profile's windows first");
     }
+    const profile = profiles.get(id);
     await profiles.remove(id);
-    await runtime.erase(id);
+    if (profile) await spaces.backend(profile.kernel).erase(id);
     notifyManager();
   });
   serve("profiles:open", async ({ id }) => {
     const profile = profiles.get(id);
     if (!profile) throw new ProfileInputError(`Profile not found: ${id}`);
-    const space = await spaces.open(
-      profile.name,
-      "user",
-      await runtime.start(profile),
-    );
+    const space = await spaces.open(profile.name, "user", profile);
     return { id: space.id };
   });
   serve("space:command", async (command: ChromeCommand, event) => {
-    await spaces.forChrome(event.sender)?.command(command);
+    await electron.forChrome(event.sender)?.command(command);
   });
 
   const server: AgentServer = await startAgentServer({
     endpointFile: path.join(userData, "agent-endpoint.json"),
     handlers: new AgentApi({
       profiles,
-      runtime,
       spaces,
       version: app.getVersion(),
     }),
@@ -145,7 +140,7 @@ async function main(): Promise<void> {
     if (stopping) return;
     stopping = true;
     event.preventDefault();
-    void Promise.allSettled([server.close(), runtime.stop()]).then(() =>
+    void Promise.allSettled([server.close(), spaces.stop()]).then(() =>
       app.quit(),
     );
   });
