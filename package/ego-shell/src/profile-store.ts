@@ -20,9 +20,17 @@ export type Fingerprint = {
   userAgent?: string;
 };
 
+/**
+ * Which browser runs the profile. `electron` is the shell's own Chromium with
+ * CDP overrides; `apostate` is a separate fingerprint-patched Chromium process.
+ * The two keep separate storage, so switching starts from empty cookies.
+ */
+export type Kernel = "electron" | "apostate";
+
 export type Profile = {
   id: string;
   name: string;
+  kernel: Kernel;
   proxy: ProxyConfig;
   fingerprint: Fingerprint;
 };
@@ -41,6 +49,7 @@ export class ProfileInputError extends Error {}
 
 type ProfileDraft = {
   name: string;
+  kernel: Kernel;
   /** `password: undefined` on an upstream proxy means "keep the stored one". */
   proxy: ProxyConfig;
   locale: string;
@@ -110,6 +119,14 @@ function parseProxy(raw: unknown): ProxyConfig {
   return proxy;
 }
 
+function parseKernel(raw: unknown): Kernel {
+  if (raw === undefined || raw === null || raw === "") return "electron";
+  if (raw !== "electron" && raw !== "apostate") {
+    throw new ProfileInputError("kernel must be electron or apostate");
+  }
+  return raw;
+}
+
 function parseDraft(raw: unknown): ProfileDraft {
   if (!raw || typeof raw !== "object") {
     throw new ProfileInputError("profile must be an object");
@@ -139,6 +156,7 @@ function parseDraft(raw: unknown): ProfileDraft {
   const userAgent = text(fingerprint.userAgent, "userAgent", false);
   return {
     name,
+    kernel: parseKernel(input.kernel),
     proxy: parseProxy(input.proxy),
     locale,
     timezone,
@@ -159,6 +177,7 @@ function defaultProfile(): Profile {
   return {
     id: DEFAULT_PROFILE_ID,
     name: "Default",
+    kernel: "electron",
     proxy: { scheme: "none" },
     fingerprint: { seed: newSeed(), locale: "en-US", timezone: "UTC" },
   };
@@ -184,7 +203,14 @@ export class ProfileStore {
     const store = new ProfileStore(file);
     try {
       const parsed = JSON.parse(await readFile(file, "utf8"));
-      store.#profiles = Array.isArray(parsed?.profiles) ? parsed.profiles : [];
+      const stored: Profile[] = Array.isArray(parsed?.profiles)
+        ? parsed.profiles
+        : [];
+      // Files written before kernels existed have no `kernel` field.
+      store.#profiles = stored.map((profile) => ({
+        ...profile,
+        kernel: profile.kernel ?? "electron",
+      }));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -209,6 +235,7 @@ export class ProfileStore {
     const profile: Profile = {
       id: randomBytes(6).toString("hex"),
       name: draft.name,
+      kernel: draft.kernel,
       proxy: draft.proxy,
       fingerprint: {
         seed: newSeed(),
@@ -239,6 +266,7 @@ export class ProfileStore {
     const updated: Profile = {
       id,
       name: draft.name,
+      kernel: draft.kernel,
       proxy,
       fingerprint: {
         seed: current.fingerprint.seed,

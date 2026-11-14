@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -102,6 +102,7 @@ test("invalid input is rejected before anything is written", async () => {
     ],
     [{ ...BRAZIL, fingerprint: { timezone: "Mars/Olympus" } }, /timezone/],
     [{ ...BRAZIL, fingerprint: { locale: "not a locale" } }, /locale/],
+    [{ ...BRAZIL, kernel: "firefox" }, /kernel/],
   ];
   for (const [input, message] of invalid) {
     await assert.rejects(store.create(input), message);
@@ -115,4 +116,37 @@ test("the default profile cannot be removed, others can", async () => {
   await assert.rejects(store.remove(DEFAULT_PROFILE_ID), /cannot be removed/);
   await store.remove(created.id);
   assert.equal(store.get(created.id), undefined);
+});
+
+test("a profile runs on electron unless it asks for the apostate kernel", async () => {
+  const { store } = await openStore();
+  const plain = await store.create(BRAZIL);
+  const patched = await store.create({ ...BRAZIL, kernel: "apostate" });
+  assert.equal(plain.kernel, "electron");
+  assert.equal(patched.kernel, "apostate");
+  const back = await store.update(patched.id, {
+    ...BRAZIL,
+    kernel: "electron",
+  });
+  assert.equal(back.kernel, "electron");
+});
+
+test("a profiles file written before kernels existed loads as electron", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ego-shell-store-"));
+  const file = path.join(directory, "profiles.json");
+  const legacy = {
+    profiles: [
+      {
+        id: DEFAULT_PROFILE_ID,
+        name: "Default",
+        proxy: { scheme: "none" },
+        fingerprint: { seed: "a".repeat(32), locale: "en-US", timezone: "UTC" },
+      },
+    ],
+  };
+  const text = JSON.stringify(legacy);
+  await writeFile(file, text);
+  const store = await ProfileStore.open(file);
+  assert.equal(store.get(DEFAULT_PROFILE_ID).kernel, "electron");
+  assert.equal(await readFile(file, "utf8"), text);
 });
