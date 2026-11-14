@@ -426,6 +426,24 @@ test("a browser that dies takes its spaces with it", async (t) => {
   });
 });
 
+test("the mouse highlight lands on the point asked for on a Retina screen", async (t) => {
+  const { chromium, browser } = await setup(t);
+  // Chromium draws a highlight twice as large and twice as far out there.
+  chromium.replies.set("Page.getLayoutMetrics", {
+    visualViewport: { clientWidth: 2400 },
+    cssVisualViewport: { clientWidth: 1200 },
+  });
+  const space = await browser.createSpace("orders", "agent");
+  const [tab] = space.tabs();
+
+  await space.highlightMouse(200, 100);
+
+  const [, overlaySession] = chromium.sessionsOf(tab.targetId);
+  const [{ params }] = chromium.sent(overlaySession, "Overlay.highlightRect");
+  assert.equal((params.x + params.width / 2) * 2, 200);
+  assert.equal((params.y + params.height / 2) * 2, 100);
+});
+
 test("the mouse highlight is drawn by the browser on a session of its own", async (t) => {
   const { chromium, browser } = await setup(t);
   const space = await browser.createSpace("orders", "agent");
@@ -437,7 +455,12 @@ test("the mouse highlight is drawn by the browser on a session of its own", asyn
   const [, overlaySession] = chromium.sessionsOf(tab.targetId);
   assert.deepEqual(
     chromium.sent(overlaySession).map((call) => call.method),
-    ["DOM.enable", "Overlay.enable", "Overlay.highlightRect"],
+    [
+      "DOM.enable",
+      "Overlay.enable",
+      "Page.getLayoutMetrics",
+      "Overlay.highlightRect",
+    ],
   );
   const [{ params }] = chromium.sent(overlaySession, "Overlay.highlightRect");
   assert.equal(params.x + params.width / 2, 200);

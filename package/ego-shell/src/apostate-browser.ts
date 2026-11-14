@@ -136,14 +136,15 @@ class ApostateTab implements TaskTab {
       throw error;
     });
     const session = await this.#overlay;
+    const scale = await this.#overlayScale(session);
     const draw = (size: number) =>
       this.#connection.send(
         "Overlay.highlightRect",
         {
-          x: Math.round(x - size / 2),
-          y: Math.round(y - size / 2),
-          width: size,
-          height: size,
+          x: Math.round((x - size / 2) / scale),
+          y: Math.round((y - size / 2) / scale),
+          width: Math.round(size / scale),
+          height: Math.round(size / scale),
           color: HIGHLIGHT_FILL,
           outlineColor: HIGHLIGHT_OUTLINE,
         },
@@ -187,6 +188,20 @@ class ApostateTab implements TaskTab {
       this.#sessions.delete(sessionId);
     }
     this.#children.clear();
+  }
+
+  /**
+   * How many times larger the browser draws a highlight than the page pixels
+   * it is given: the display's scale, 2 on a Retina screen.
+   */
+  async #overlayScale(session: string): Promise<number> {
+    const metrics = await this.#connection
+      .send("Page.getLayoutMetrics", {}, session)
+      .catch(() => undefined);
+    const scale =
+      metrics?.visualViewport?.clientWidth /
+      metrics?.cssVisualViewport?.clientWidth;
+    return scale > 0 && Number.isFinite(scale) ? scale : 1;
   }
 
   async #openOverlay(): Promise<string> {
