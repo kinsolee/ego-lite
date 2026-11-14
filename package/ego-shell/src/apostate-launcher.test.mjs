@@ -75,6 +75,7 @@ test("a proxied profile only ever names the loopback relay", () => {
     launchOptions("/data/profile", { proxyPort: 41234 }),
   );
   assert.ok(args.includes("--proxy-server=socks5://127.0.0.1:41234"));
+  assert.ok(args.includes("--proxy-bypass-list=<-loopback>"));
   assert.ok(
     args.includes("--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1"),
   );

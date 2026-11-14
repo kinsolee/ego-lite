@@ -57,6 +57,9 @@ export function apostateArguments(launch: KernelLaunch): string[] {
   if (launch.proxyPort !== undefined) {
     args.push(
       `--proxy-server=socks5://127.0.0.1:${launch.proxyPort}`,
+      // Chromium sends loopback addresses direct unless told otherwise, which
+      // would let a page reach services on this machine.
+      "--proxy-bypass-list=<-loopback>",
       // Names are resolved by the proxy; this stops every other lookup on the host.
       "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
     );
