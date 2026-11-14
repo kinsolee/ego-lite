@@ -1,7 +1,6 @@
 import { WebContentsView, type Session, type WebContents } from "electron";
 
 import {
-  IFRAME_AUTO_ATTACH,
   type ChildTarget,
   type RoutedTab,
   type TargetInfo,
@@ -30,6 +29,17 @@ export type TabEvents = {
 
 // Only iframes are attached: workers share the frame's process-wide overrides.
 /** One browser tab of a profile: a web view plus the CDP session that drives it. */
+/**
+ * A tab's children start paused so the overrides are in place before any of
+ * their script runs. Chromium pauses workers as well, even when a filter hides
+ * them, so nothing is filtered and every child is resumed.
+ */
+const PAUSED_AUTO_ATTACH = {
+  autoAttach: true,
+  waitForDebuggerOnStart: true,
+  flatten: true,
+};
+
 export class Tab implements RoutedTab {
   readonly view: WebContentsView;
   targetId = "";
@@ -37,6 +47,8 @@ export class Tab implements RoutedTab {
   readonly #profileId: string;
   readonly #events: TabEvents;
   readonly #children = new Map<string, ChildTarget>();
+  /** Sessions of workers and other children agents are not told about. */
+  readonly #unannounced = new Set<string>();
   #overrides: TabOverrides;
 
   private constructor(
@@ -140,8 +152,8 @@ export class Tab implements RoutedTab {
   async applyOverrides(overrides: TabOverrides): Promise<void> {
     this.#overrides = overrides;
     await Promise.all(
-      [undefined, ...this.#children.keys()].map((sessionId) =>
-        this.#emulate(sessionId),
+      [undefined, ...this.#children.keys(), ...this.#unannounced].map(
+        (sessionId) => this.#emulate(sessionId),
       ),
     );
   }
@@ -191,11 +203,12 @@ export class Tab implements RoutedTab {
 
   async #attach(): Promise<void> {
     this.#children.clear();
+    this.#unannounced.clear();
     this.webContents.debugger.attach("1.3");
     await this.#emulate(undefined);
     await this.webContents.debugger.sendCommand(
       "Target.setAutoAttach",
-      IFRAME_AUTO_ATTACH,
+      PAUSED_AUTO_ATTACH,
     );
   }
 
@@ -214,7 +227,14 @@ export class Tab implements RoutedTab {
   }
 
   #onMessage(method: string, params: any, sessionId: string | undefined): void {
+    const hidden = sessionId !== undefined && this.#unannounced.has(sessionId);
     if (method === "Target.attachedToTarget") {
+      // A worker's own workers are paused too and need the same resume.
+      if (hidden || params.targetInfo.type !== "iframe") {
+        this.#unannounced.add(params.sessionId);
+        void this.#startChild(params.sessionId);
+        return;
+      }
       const child: ChildTarget = {
         sessionId: params.sessionId,
         parentSessionId: sessionId,
@@ -225,8 +245,10 @@ export class Tab implements RoutedTab {
       // The shell resumes the frame itself, so clients must not wait on it.
       params = { ...params, waitingForDebugger: false };
     } else if (method === "Target.detachedFromTarget") {
+      if (this.#unannounced.delete(params.sessionId)) return;
       this.#forget(params.sessionId);
     }
+    if (hidden) return;
     this.#events.cdpEvent(this, method, params, sessionId);
   }
 
@@ -234,7 +256,7 @@ export class Tab implements RoutedTab {
     const dbg = this.webContents.debugger;
     await this.#emulate(sessionId);
     await dbg
-      .sendCommand("Target.setAutoAttach", IFRAME_AUTO_ATTACH, sessionId)
+      .sendCommand("Target.setAutoAttach", PAUSED_AUTO_ATTACH, sessionId)
       .catch(() => {});
     await dbg
       .sendCommand("Runtime.runIfWaitingForDebugger", {}, sessionId)

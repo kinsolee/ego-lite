@@ -1,9 +1,5 @@
 import { CdpConnection, type CdpEvent } from "./browser-cdp.js";
-import {
-  IFRAME_AUTO_ATTACH,
-  type ChildTarget,
-  type TargetInfo,
-} from "./cdp-router.js";
+import { type ChildTarget, type TargetInfo } from "./cdp-router.js";
 import type { Profile } from "./profile-store.js";
 import {
   TaskSpace,
@@ -13,6 +9,18 @@ import {
 } from "./task-space.js";
 
 /** Side lengths, in CSS pixels, of the square drawn where the agent acts. */
+/**
+ * Announces a tab's out-of-process frames. Nothing starts paused: the kernel
+ * needs no setup in a frame, and Chromium would pause the page's workers too
+ * without announcing them, leaving them stuck.
+ */
+const FRAME_AUTO_ATTACH = {
+  autoAttach: true,
+  waitForDebuggerOnStart: false,
+  flatten: true,
+  filter: [{ type: "iframe" }],
+};
+
 const HIGHLIGHT_SIZES = [44, 30, 20];
 const HIGHLIGHT_STEP_MS = 130;
 const HIGHLIGHT_HOLD_MS = 450;
@@ -97,7 +105,7 @@ class ApostateTab implements TaskTab {
 
   /** Attach to the tab's out-of-process frames, as agents expect them announced. */
   async watchFrames(): Promise<void> {
-    await this.send("Target.setAutoAttach", IFRAME_AUTO_ATTACH).catch(() => {});
+    await this.send("Target.setAutoAttach", FRAME_AUTO_ATTACH).catch(() => {});
   }
 
   update(info: ChromiumTarget): void {
@@ -114,7 +122,7 @@ class ApostateTab implements TaskTab {
         targetInfo: params.targetInfo,
       });
       this.#sessions.set(params.sessionId, this);
-      void this.#resume(params.sessionId);
+      void this.#watchNested(params.sessionId);
       params = { ...params, waitingForDebugger: false };
     } else if (method === "Target.detachedFromTarget") {
       this.#forget(params.sessionId);
@@ -193,12 +201,9 @@ class ApostateTab implements TaskTab {
     return sessionId;
   }
 
-  async #resume(sessionId: string): Promise<void> {
+  async #watchNested(sessionId: string): Promise<void> {
     await this.#connection
-      .send("Target.setAutoAttach", IFRAME_AUTO_ATTACH, sessionId)
-      .catch(() => {});
-    await this.#connection
-      .send("Runtime.runIfWaitingForDebugger", {}, sessionId)
+      .send("Target.setAutoAttach", FRAME_AUTO_ATTACH, sessionId)
       .catch(() => {});
   }
 

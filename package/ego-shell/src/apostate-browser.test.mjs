@@ -185,7 +185,25 @@ test("the session agents drive has no domain enabled by the shell", async (t) =>
   );
 });
 
-test("an out-of-process frame is resumed and reachable by its session", async (t) => {
+test("nothing in a page is left waiting for the shell to resume it", async (t) => {
+  const { chromium, browser } = await setup(t);
+  const space = await browser.createSpace("orders", "agent");
+  const [pageSession] = chromium.sessionsOf(space.tabs()[0].targetId);
+  const frameSession = chromium.attachFrame(pageSession, "FRAME");
+  await until(
+    () => chromium.sent(frameSession, "Target.setAutoAttach").length > 0,
+    "the frame to be watched",
+  );
+
+  // Chromium pauses a page's workers along with its frames and never announces
+  // them under a frame filter, so a paused start would hang them for good.
+  for (const sessionId of [pageSession, frameSession]) {
+    const [watch] = chromium.sent(sessionId, "Target.setAutoAttach");
+    assert.equal(watch.params.waitForDebuggerOnStart, false);
+  }
+});
+
+test("an out-of-process frame is reachable by its session", async (t) => {
   const { chromium, browser } = await setup(t);
   const space = await browser.createSpace("orders", "agent");
   const [tab] = space.tabs();
@@ -206,11 +224,6 @@ test("an out-of-process frame is resumed and reachable by its session", async (t
   assert.equal(event.params.sessionId, frameSession);
   assert.equal(event.params.waitingForDebugger, false);
   assert.deepEqual([...tab.childFrames()], [["FRAME", frameSession]]);
-  await until(
-    () =>
-      chromium.sent(frameSession, "Runtime.runIfWaitingForDebugger").length > 0,
-    "the frame to be resumed",
-  );
 
   await agent.call("DOM.getDocument", {}, frameSession);
   assert.equal(chromium.sent(frameSession, "DOM.getDocument").length, 1);
