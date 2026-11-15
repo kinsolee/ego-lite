@@ -460,15 +460,6 @@ function render(root: Line, options: SnapshotOptions): SnapshotResult {
   return { content, refs };
 }
 
-function findByBackendId(line: Line, backendNodeId: number): Line | undefined {
-  if (line.backendNodeId === backendNodeId && !line.frameId) return line;
-  for (const child of line.children) {
-    const found = findByBackendId(child, backendNodeId);
-    if (found) return found;
-  }
-  return undefined;
-}
-
 export async function captureSnapshot(
   source: SnapshotSource,
   options: SnapshotOptions = {},
@@ -501,13 +492,20 @@ export async function captureSnapshot(
     let root: Line | undefined = top.root;
     if (scope === "subtree") {
       const target = options.root;
-      root =
+      // A backend id is unique only within one frame's process, and the
+      // binding is given no frame to tell matches apart.
+      const matches =
         typeof target === "number"
-          ? (findByBackendId(top.root, target) ??
-            documents
-              .map((document) => document.byBackendId.get(target))
-              .find(Boolean))
-          : undefined;
+          ? documents.flatMap(
+              (document) => document.byBackendId.get(target) ?? [],
+            )
+          : [];
+      if (matches.length > 1) {
+        throw new SnapshotError(
+          `Snapshot root ${target} is ambiguous: it names a node in ${matches.length} frames`,
+        );
+      }
+      root = matches[0];
       if (!root) {
         throw new SnapshotError(`Snapshot root not found: ${options.root}`);
       }

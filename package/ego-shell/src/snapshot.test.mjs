@@ -387,3 +387,21 @@ test("a page that cannot be read fails with the snapshot error code", async () =
       ),
   );
 });
+
+test("a subtree root whose backend id occurs in more than one frame is refused", async () => {
+  // Backend ids are local to a frame's process: the card frame's textbox and
+  // the page's Pay button are both 2.
+  await assert.rejects(
+    captureSnapshot(checkoutPage(), { scope: "subtree", root: 2 }),
+    (error) =>
+      error instanceof SnapshotError &&
+      error.error_code === "EGO_SNAPSHOT_FAILED" &&
+      /Snapshot root 2 is ambiguous/.test(error.message),
+  );
+
+  const { content } = await captureSnapshot(checkoutPage(), {
+    scope: "subtree",
+    root: 21,
+  });
+  assert.match(content, /^link "Read all"/);
+});
