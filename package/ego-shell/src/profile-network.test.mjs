@@ -43,14 +43,20 @@ function fakeSession() {
   };
 }
 
-function setup() {
+function setup(options = {}) {
   const session = fakeSession();
   const relays = [];
   let nextPort = 40_000;
+  /** When set, the next relay fails to start with this error. */
+  const relayStart = { error: undefined };
   const networks = new ProfileNetworks({
+    ...options,
     session: () => session,
     async startRelay(proxy) {
       await delay(5);
+      const { error } = relayStart;
+      relayStart.error = undefined;
+      if (error) throw error;
       const relay = {
         port: nextPort++,
         upstream: proxy.port,
@@ -74,7 +80,7 @@ function setup() {
   const openRelays = () => relays.filter((relay) => relay.open);
   const proxyPort = () =>
     Number(session.proxy?.proxyRules?.split(":").at(-1) ?? NaN);
-  return { networks, session, relays, openRelays, proxyPort };
+  return { networks, session, relays, relayStart, openRelays, proxyPort };
 }
 
 test("a proxied profile runs through one relay, replaced on update and closed on release", async () => {
@@ -192,4 +198,45 @@ test("a user agent that fails to apply rolls the proxy switch back", async () =>
   assert.equal(proxyPort(), openRelays()[0].port);
   assert.deepEqual({ ...session.userAgent }, before);
   assert.equal(networks.live()[0], live);
+});
+
+/** Settles with the promise's rejection, or "still waiting" if it takes too long. */
+async function rejection(promise) {
+  return Promise.race([
+    promise.then(
+      () => "resolved",
+      (error) => error,
+    ),
+    delay(2_000).then(() => "still waiting"),
+  ]);
+}
+
+test("a profile that cannot be restored is reported unusable even when its relay fails to close", async () => {
+  const { networks, session } = setup();
+  const live = await networks.start(profile(1080));
+  const closeError = new Error("relay close failed");
+  live.relay.close = () => Promise.reject(closeError);
+  let calls = 0;
+  session.fail.closeAllConnections = () => true;
+  session.fail.setProxy = () => ++calls > 1;
+
+  const error = await rejection(networks.update(profile(1081)));
+
+  assert.equal(error.name, "ProfileUnusableError");
+  assert.ok(error.cause.errors.includes(closeError), "the close error is kept");
+  assert.equal(networks.live().length, 0);
+});
+
+test("a profile that cannot be restored is reported unusable even when its relay never closes", async () => {
+  const { networks, session } = setup({ relayCloseTimeoutMs: 50 });
+  const live = await networks.start(profile(1080));
+  live.relay.close = () => new Promise(() => {});
+  let calls = 0;
+  session.fail.closeAllConnections = () => true;
+  session.fail.setProxy = () => ++calls > 1;
+
+  const error = await rejection(networks.update(profile(1081)));
+
+  assert.equal(error.name, "ProfileUnusableError");
+  assert.equal(networks.live().length, 0);
 });

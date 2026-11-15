@@ -19,12 +19,15 @@ export type LiveProfile<S> = {
 
 type Entry<S> = LiveProfile<S> & { relay: Relay | undefined };
 
+const RELAY_CLOSE_TIMEOUT_MS = 5_000;
+
 /** A profile whose session was left in a state nobody can vouch for; it has been stopped. */
 export class ProfileUnusableError extends Error {
-  constructor(profileId: string, error: unknown, restoreError: unknown) {
+  /** `errors`: the failed switch, the failed restore, then any failure to stop. */
+  constructor(profileId: string, errors: unknown[]) {
     super(
       `Profile ${profileId} could not apply its new network settings or restore the old ones, so it was stopped`,
-      { cause: new AggregateError([error, restoreError]) },
+      { cause: new AggregateError(errors) },
     );
     this.name = "ProfileUnusableError";
   }
@@ -35,6 +38,8 @@ export type NetworkDeps<S> = {
   session(profileId: string): S;
   startRelay(proxy: ProxyConfig): Promise<Relay>;
   overrides(profile: Profile): TabOverrides;
+  /** How long a relay may take to close before the shell stops waiting for it. */
+  relayCloseTimeoutMs?: number;
 };
 
 /** The running network identity of each profile: its session, proxy relay and overrides. */
@@ -75,7 +80,7 @@ export class ProfileNetworks<S extends NetworkSession> {
       const previous = entry.relay;
       // Spaces hold this object, so the new state is written into it.
       Object.assign(entry, next);
-      await previous?.close();
+      if (previous) await this.#close(previous);
       return entry;
     });
   }
@@ -109,7 +114,31 @@ export class ProfileNetworks<S extends NetworkSession> {
   async #drop(profileId: string): Promise<void> {
     const entry = this.#entries.get(profileId);
     this.#entries.delete(profileId);
-    await entry?.relay?.close();
+    if (entry?.relay) await this.#close(entry.relay);
+  }
+
+  /** A relay that never finishes closing would hold the profile's queue for good. */
+  async #close(relay: Relay): Promise<void> {
+    const timeoutMs = this.#deps.relayCloseTimeoutMs ?? RELAY_CLOSE_TIMEOUT_MS;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        relay.close(),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `The proxy relay did not close within ${timeoutMs} ms`,
+                ),
+              ),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async #start(profile: Profile): Promise<Entry<S>> {
@@ -136,7 +165,7 @@ export class ProfileNetworks<S extends NetworkSession> {
     try {
       await this.#apply(session, profile.proxy, relay?.port, overrides);
     } catch (error) {
-      await relay?.close();
+      if (relay) await this.#close(relay);
       throw error;
     }
     return { profile, relay, overrides };
@@ -155,8 +184,11 @@ export class ProfileNetworks<S extends NetworkSession> {
         entry.overrides,
       );
     } catch (restoreError) {
-      await this.#drop(entry.profile.id);
-      throw new ProfileUnusableError(entry.profile.id, error, restoreError);
+      const errors = [error, restoreError];
+      await this.#drop(entry.profile.id).catch((dropError) =>
+        errors.push(dropError),
+      );
+      throw new ProfileUnusableError(entry.profile.id, errors);
     }
   }
 
