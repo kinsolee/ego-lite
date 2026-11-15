@@ -110,6 +110,11 @@ class ApostateTab implements TaskTab {
     );
   }
 
+  /** A command the shell sends on its own behalf, bounded like its other bookkeeping. */
+  sendOwn(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    return this.#connection.send(method, params, this.#session);
+  }
+
   /** Attach to the tab's out-of-process frames, as agents expect them announced. */
   async watchFrames(): Promise<void> {
     await this.#watchNested(this.#session);
@@ -319,7 +324,7 @@ export class ApostateSpace extends TaskSpace {
   protected releaseAgentState(): void {
     for (const tab of this.#tabs) {
       tab
-        .send("Page.setInterceptFileChooserDialog", { enabled: false })
+        .sendOwn("Page.setInterceptFileChooserDialog", { enabled: false })
         .catch(() => {});
       void tab.hideHighlight();
     }

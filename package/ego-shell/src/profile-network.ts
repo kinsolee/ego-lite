@@ -163,7 +163,7 @@ export class ProfileNetworks<S extends NetworkSession> {
 
   /**
    * Put prepared settings in force on `session`. On failure the new relay,
-   * which holds the upstream credentials, is closed.
+   * which holds the upstream credentials, is asked to close.
    */
   async #switch(
     session: S,
