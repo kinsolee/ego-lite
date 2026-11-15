@@ -180,6 +180,37 @@ async function run(action) {
   }
 }
 
+const kernelStatus = document.getElementById("kernel-status");
+const kernelInstall = document.getElementById("kernel-install");
+
+function megabytes(bytes) {
+  return `${Math.round(bytes / 1e6)} MB`;
+}
+
+async function refreshKernel() {
+  const status = await request("kernel:status");
+  const name = `Apostate ${status.version ?? ""}`.trim();
+  const text = {
+    missing: () => `${name} kernel is not installed.`,
+    installing: () =>
+      `Downloading ${name}: ${megabytes(status.received)}` +
+      (status.total ? ` of ${megabytes(status.total)}` : ""),
+    installed: () => `${name} kernel is installed.`,
+    failed: () => `${name} kernel could not be installed: ${status.error}`,
+    unavailable: () => status.error,
+  }[status.state]();
+  kernelStatus.textContent = text;
+  kernelInstall.hidden = !["missing", "failed"].includes(status.state);
+  kernelInstall.textContent =
+    status.state === "failed" ? "Try again" : "Install Apostate";
+}
+
+// The download is about 160 MB from the Apostate release on GitHub.
+kernelInstall.onclick = () => {
+  kernelInstall.hidden = true;
+  request("kernel:install").catch(() => {});
+};
+
 form.elements.scheme.onchange = syncProxyFields;
 form.elements.kernel.onchange = syncKernelFields;
 document.getElementById("form-reset").onclick = () => edit(null);
@@ -192,5 +223,7 @@ form.onsubmit = (event) => {
 };
 
 window.shell.on("profiles:changed", () => void refresh());
+window.shell.on("kernel:changed", () => void refreshKernel());
+void refreshKernel();
 edit(null);
 void refresh();

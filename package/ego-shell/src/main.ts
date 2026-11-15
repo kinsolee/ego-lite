@@ -12,6 +12,7 @@ import {
   ProfileStore,
   redactProfile,
 } from "./profile-store.js";
+import { KernelInstaller } from "./kernel-install.js";
 import { ElectronBackend, type ChromeCommand } from "./spaces.js";
 import { TaskSpaces } from "./task-space.js";
 
@@ -45,6 +46,14 @@ async function main(): Promise<void> {
     }
   };
   const spaces = new TaskSpaces(notifyManager);
+  const kernel = new KernelInstaller({
+    dataDir: userData,
+    onChange: () => {
+      if (manager && !manager.isDestroyed()) {
+        manager.webContents.send("kernel:changed");
+      }
+    },
+  });
   const electron = new ElectronBackend(runtime, spaces, APP_ROOT);
   spaces.register("electron", electron);
   spaces.register(
@@ -126,6 +135,9 @@ async function main(): Promise<void> {
     const space = await spaces.open(profile.name, "user", profile);
     return { id: space.id };
   });
+  serve("kernel:status", () => kernel.status());
+  // The only place the shell reaches the network for itself.
+  serve("kernel:install", () => kernel.install());
   serve("space:command", async (command: ChromeCommand, event) => {
     await electron.forChrome(event.sender)?.command(command);
   });

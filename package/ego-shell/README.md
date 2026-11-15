@@ -33,12 +33,19 @@ in plain text, readable only by the owner.
 
 ## Install the Apostate kernel
 
-The shell does not download the kernel. Extract
-`apostate-155.0.8059.31-macos-arm64.zip` (Apostate 0.5.1) into
-`<userData>/kernels/155.0.8059.31/`, so that
-`kernels/155.0.8059.31/Chromium.app` exists. Before the first Apostate profile
-of a run starts, the shell compares the browser binary and its framework with
-the SHA-256 values pinned in `src/kernel.ts` and refuses a build that differs.
+The manager shows whether the kernel is installed. Install Apostate downloads
+`apostate-155.0.8059.31-macos-arm64.zip` (Apostate 0.5.1, about 160 MB) from
+the project's GitHub release; it is the only time the shell itself goes to
+the network. The archive's manifest from the same release must give the
+SHA-256 that `src/kernel.ts` pins, and the archive must hash to it. It is
+extracted into `<userData>/kernels/155.0.8059.31/`, and its browser binary and
+framework must match the SHA-256 values pinned for them, before it replaces
+anything there. When a step fails, everything it wrote is deleted and the
+manager shows why.
+
+Extracting the archive into that directory by hand works as well. Before the
+first Apostate profile of a run starts, the shell checks the binary and its
+framework against the pinned values and refuses a build that differs.
 
 `EGO_SHELL_APOSTATE_BIN` names a binary to run instead. That binary is not
 checked.

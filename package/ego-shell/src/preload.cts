@@ -6,9 +6,11 @@ const REQUESTS = new Set([
   "profiles:remove",
   "profiles:open",
   "profiles:stop",
+  "kernel:status",
+  "kernel:install",
   "space:command",
 ]);
-const EVENTS = new Set(["profiles:changed", "space:state"]);
+const EVENTS = new Set(["profiles:changed", "kernel:changed", "space:state"]);
 
 contextBridge.exposeInMainWorld("shell", {
   request(channel: string, payload?: unknown): Promise<unknown> {
