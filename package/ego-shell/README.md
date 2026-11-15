@@ -113,9 +113,10 @@ Each profile has its own `--user-data-dir` under
 `<userData>/apostate-profiles/<profile id>`. Its seed, locale and timezone
 come from the profile: `--fingerprint=<seed>`, `--fingerprint-platform=macos`,
 `--fingerprint-locale`, `--fingerprint-timezone`, and `TZ` in the process
-environment. `--fingerprint-noise` is left off because sites that look for
-anti-detect browsers recognise it. The port is `--remote-debugging-port=0`,
-read back from `DevToolsActivePort`. A kernel left over from a crashed shell is
+environment. `--fingerprint-noise` is on: without it every profile reports
+the same canvas hash, which lets a site tie one profile's accounts to
+another's. The port is `--remote-debugging-port=0`, read back from
+`DevToolsActivePort`. A kernel left over from a crashed shell is
 stopped before the profile starts again.
 
 The shell enables no CDP domain on the session an agent drives.
