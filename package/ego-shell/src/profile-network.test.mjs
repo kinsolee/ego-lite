@@ -143,3 +143,53 @@ test("a start after a release runs on a fresh entry", async () => {
   );
   assert.equal(networks.live()[0], again);
 });
+
+test("a proxy switch that cannot be undone takes the profile down, and the next start is clean", async () => {
+  const { networks, session, openRelays, proxyPort } = setup();
+  await networks.start(profile(1080));
+  let calls = 0;
+  session.fail.closeAllConnections = () => true;
+  session.fail.setProxy = () => ++calls > 1;
+
+  await assert.rejects(networks.update(profile(1081)), {
+    name: "ProfileUnusableError",
+  });
+
+  assert.equal(networks.live().length, 0, "nothing claims the old state");
+  assert.equal(openRelays().length, 0);
+
+  session.fail = {};
+  const again = await networks.start(profile(1082));
+  assert.equal(again.profile.proxy.port, 1082);
+  assert.deepEqual(
+    openRelays().map((relay) => relay.upstream),
+    [1082],
+  );
+  assert.equal(proxyPort(), openRelays()[0].port);
+});
+
+test("a user agent that fails to apply rolls the proxy switch back", async () => {
+  const { networks, session, openRelays, proxyPort } = setup();
+  const live = await networks.start(profile(1080));
+  const before = { ...session.userAgent };
+  session.fail.setUserAgent = (userAgent) => userAgent === "UA2";
+
+  await assert.rejects(
+    networks.update(
+      profile(1081, {
+        fingerprint: { ...profile().fingerprint, userAgent: "UA2" },
+      }),
+    ),
+    { message: "setUserAgent failed" },
+  );
+
+  assert.equal(live.profile.proxy.port, 1080);
+  assert.equal(live.overrides.userAgent.userAgent, "UA");
+  assert.deepEqual(
+    openRelays().map((relay) => relay.upstream),
+    [1080],
+  );
+  assert.equal(proxyPort(), openRelays()[0].port);
+  assert.deepEqual({ ...session.userAgent }, before);
+  assert.equal(networks.live()[0], live);
+});

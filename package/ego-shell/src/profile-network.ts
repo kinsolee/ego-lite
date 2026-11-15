@@ -17,7 +17,18 @@ export type LiveProfile<S> = {
   overrides: TabOverrides;
 };
 
-type Entry<S> = LiveProfile<S> & { relay?: Relay };
+type Entry<S> = LiveProfile<S> & { relay: Relay | undefined };
+
+/** A profile whose session was left in a state nobody can vouch for; it has been stopped. */
+export class ProfileUnusableError extends Error {
+  constructor(profileId: string, error: unknown, restoreError: unknown) {
+    super(
+      `Profile ${profileId} could not apply its new network settings or restore the old ones, so it was stopped`,
+      { cause: new AggregateError([error, restoreError]) },
+    );
+    this.name = "ProfileUnusableError";
+  }
+}
 
 export type NetworkDeps<S> = {
   /** The profile's session, ready to be pointed at a proxy. */
@@ -54,8 +65,16 @@ export class ProfileNetworks<S extends NetworkSession> {
     return this.#queue.run(profile.id, async () => {
       const entry = this.#entries.get(profile.id);
       if (!entry) return undefined;
+      let next: Omit<Entry<S>, "session">;
+      try {
+        next = await this.#switch(entry.session, profile);
+      } catch (error) {
+        await this.#rollBack(entry, error);
+        throw error;
+      }
       const previous = entry.relay;
-      await this.#applyNetwork(entry, profile);
+      // Spaces hold this object, so the new state is written into it.
+      Object.assign(entry, next);
       await previous?.close();
       return entry;
     });
@@ -94,45 +113,66 @@ export class ProfileNetworks<S extends NetworkSession> {
   }
 
   async #start(profile: Profile): Promise<Entry<S>> {
-    const entry = { session: this.#deps.session(profile.id) } as Entry<S>;
-    await this.#applyNetwork(entry, profile);
+    const session = this.#deps.session(profile.id);
+    const entry = { session, ...(await this.#switch(session, profile)) };
     this.#entries.set(profile.id, entry);
     return entry;
   }
 
   /**
-   * Point the session at `profile`'s proxy and commit `profile` to the entry
-   * only once that succeeded. On failure the new relay, which holds the
-   * upstream credentials, is closed and the entry keeps its previous state.
+   * Put `profile`'s proxy, user agent and languages in force on `session`.
+   * On failure the new relay, which holds the upstream credentials, is closed
+   * and nothing is returned to commit.
    */
-  async #applyNetwork(entry: Entry<S>, profile: Profile): Promise<void> {
-    const { session } = entry;
+  async #switch(
+    session: S,
+    profile: Profile,
+  ): Promise<Omit<Entry<S>, "session">> {
+    const overrides = this.#deps.overrides(profile);
     const relay =
       profile.proxy.scheme === "none"
         ? undefined
         : await this.#deps.startRelay(profile.proxy);
     try {
-      await session.setProxy(sessionProxyConfig(profile.proxy, relay?.port));
-      // Sockets opened under the previous proxy would keep using the old exit IP.
-      await session.closeAllConnections();
+      await this.#apply(session, profile.proxy, relay?.port, overrides);
     } catch (error) {
       await relay?.close();
-      if (entry.profile) {
-        await session
-          .setProxy(sessionProxyConfig(entry.profile.proxy, entry.relay?.port))
-          .catch(() => {});
-      }
       throw error;
     }
-    entry.profile = profile;
-    entry.relay = relay;
+    return { profile, relay, overrides };
+  }
 
-    const overrides = this.#deps.overrides(profile);
+  /**
+   * Put the entry's committed settings back after a failed switch. If even
+   * that fails, nothing on the session can be trusted, so the profile stops.
+   */
+  async #rollBack(entry: Entry<S>, error: unknown): Promise<void> {
+    try {
+      await this.#apply(
+        entry.session,
+        entry.profile.proxy,
+        entry.relay?.port,
+        entry.overrides,
+      );
+    } catch (restoreError) {
+      await this.#drop(entry.profile.id);
+      throw new ProfileUnusableError(entry.profile.id, error, restoreError);
+    }
+  }
+
+  async #apply(
+    session: S,
+    proxy: ProxyConfig,
+    relayPort: number | undefined,
+    overrides: TabOverrides,
+  ): Promise<void> {
+    await session.setProxy(sessionProxyConfig(proxy, relayPort));
+    // Sockets opened under the previous proxy would keep using the old exit IP.
+    await session.closeAllConnections();
     // The CDP override does not reach service workers or shell-made requests.
     session.setUserAgent(
       overrides.userAgent.userAgent,
       overrides.userAgent.acceptLanguage,
     );
-    entry.overrides = overrides;
   }
 }

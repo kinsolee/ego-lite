@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { BrowserWindow, type WebContents } from "electron";
 
+import { ProfileUnusableError } from "./profile-network.js";
 import type { LiveProfile, ProfileRuntime } from "./profile-runtime.js";
 import type { Profile } from "./profile-store.js";
 import { describeProxy } from "./proxy-config.js";
@@ -343,7 +344,19 @@ export class ElectronBackend implements KernelBackend {
   }
 
   async update(profile: Profile): Promise<void> {
-    if (!(await this.#runtime.update(profile))) return;
+    let live: LiveProfile | undefined;
+    try {
+      live = await this.#runtime.update(profile);
+    } catch (error) {
+      // The runtime stopped the profile; its windows would browse on a session nobody manages.
+      if (error instanceof ProfileUnusableError) {
+        await Promise.all(
+          this.#ofProfile(profile.id).map((space) => space.close()),
+        );
+      }
+      throw error;
+    }
+    if (!live) return;
     await Promise.all(
       this.#ofProfile(profile.id).map((space) => space.refreshOverrides()),
     );
