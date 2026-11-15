@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -94,9 +94,9 @@ async function startFakeShell(t, answer = () => null) {
 
 const HANG = Symbol("never answer");
 
-function runCli(script, env) {
+function runCli(script, env, args = []) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI], {
+    const child = spawn(process.execPath, [CLI, ...args], {
       env: { ...process.env, ...env },
     });
     let stdout = "";
@@ -403,3 +403,93 @@ test("switching task spaces within one CLI round attaches a fresh session in the
     ],
   );
 });
+
+/** A service that took over a quit shell's port: it accepts and never speaks. */
+async function startSilentService(t) {
+  const sockets = new Set();
+  let accepted = 0;
+  const server = net.createServer((socket) => {
+    accepted += 1;
+    sockets.add(socket);
+    socket.resume();
+    socket.on("error", () => {});
+    socket.on("close", () => sockets.delete(socket));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const directory = await mkdtemp(path.join(tmpdir(), "ego-shell-silent-"));
+  t.after(async () => {
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  });
+  const endpoint = (pid) =>
+    JSON.stringify({
+      host: "127.0.0.1",
+      port: server.address().port,
+      token: TOKEN,
+      pid,
+    });
+  const explicitFile = path.join(directory, "agent-endpoint.json");
+  await writeFile(explicitFile, endpoint(process.pid));
+  const home = path.join(directory, "home");
+  const writeDefault = async (pid) => {
+    const file = defaultShellEndpointFile({ HOME: home });
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, endpoint(pid));
+  };
+  return {
+    explicitFile,
+    home,
+    writeDefault,
+    sockets,
+    accepted: () => accepted,
+  };
+}
+
+test(
+  "an explicit endpoint whose port never answers the handshake times out",
+  { timeout: 10_000 },
+  async (t) => {
+    const service = await startSilentService(t);
+
+    await assert.rejects(
+      connectShellEgo({ EGO_SHELL_ENDPOINT: service.explicitFile }),
+      /Cannot reach ego-shell through EGO_SHELL_ENDPOINT=.*: Timed out waiting for ego-shell to answer/,
+    );
+    await until(() => service.sockets.size === 0, "the socket to close");
+  },
+);
+
+test(
+  "a default endpoint whose port never answers is skipped, and the CLI still runs",
+  { timeout: 10_000 },
+  async (t) => {
+    const service = await startSilentService(t);
+    await service.writeDefault(process.pid);
+
+    assert.equal(await connectShellEgo({ HOME: service.home }), undefined);
+    const { code, stdout } = await runCli("", { HOME: service.home }, [
+      "--help",
+    ]);
+    assert.equal(code, 0);
+    assert.match(stdout, /^ego-browser/);
+  },
+);
+
+test("a default endpoint left by a shell process that has exited is not dialed", async (t) => {
+  const service = await startSilentService(t);
+  const exited = spawn(process.execPath, ["-e", ""]);
+  await new Promise((resolve) => exited.once("exit", resolve));
+  await service.writeDefault(exited.pid);
+
+  assert.equal(await connectShellEgo({ HOME: service.home }), undefined);
+  assert.equal(service.accepted(), 0);
+});
+
+async function until(condition, what) {
+  for (let i = 0; i < 200; i++) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`timed out waiting for ${what}`);
+}

@@ -116,6 +116,9 @@ export async function connectShellEgo(
   let endpoint: Endpoint;
   try {
     endpoint = readEndpoint(file);
+    // The default file outlives a shell that was killed, and its port may
+    // since belong to another service.
+    if (!explicit && !processExists(endpoint.pid)) return undefined;
     socket = await openSocket(endpoint);
   } catch (error) {
     if (!explicit) return undefined;
@@ -238,6 +241,10 @@ export async function connectShellEgo(
   });
 
   send({ t: "hello", token: endpoint.token });
+  const silence = setTimeout(() => {
+    refuse(new Error("Timed out waiting for ego-shell to answer"));
+    socket.destroy();
+  }, CONNECT_TIMEOUT_MS);
   try {
     await handshake;
   } catch (error) {
@@ -245,8 +252,19 @@ export async function connectShellEgo(
     throw new Error(
       `Cannot reach ego-shell through EGO_SHELL_ENDPOINT=${explicit}: ${(error as Error).message}`,
     );
+  } finally {
+    clearTimeout(silence);
   }
   return { ego, hostPid: endpoint.pid, close: () => socket.destroy() };
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 const DISCONNECTED: Reply = {
