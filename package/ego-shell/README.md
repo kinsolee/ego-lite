@@ -155,8 +155,9 @@ in for the kernel binary and its CDP endpoint.
   permissions other than fullscreen, pointer lock and clipboard write are
   denied. `animationHighlightMouseToPosition` succeeds without drawing
   anything. Canvas, WebGL, audio, fonts and ClientRects are the host's own.
-- Apostate: a profile's `userAgent` is ignored, since the kernel supplies its
-  own. Editing a running profile's proxy, seed, locale or timezone stops its
+- Apostate: a profile cannot set a user agent. The persona sets the
+  User-Agent, Client Hints and `navigator.platform` together, and Apostate
+  has no switch for the string alone. Editing a running profile's proxy, seed, locale or timezone stops its
   process and closes its windows; it starts with the new settings the next
   time it is started or a task space is opened on it. The active tab is the
   one last opened or activated through the shell; a tab the user picks in the

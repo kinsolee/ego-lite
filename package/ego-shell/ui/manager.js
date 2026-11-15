@@ -33,11 +33,11 @@ function syncProxyFields() {
 }
 
 function syncKernelFields() {
-  // An Apostate persona decides its own user agent.
+  // An Apostate persona decides its own user agent; the store refuses one.
   const apostate = form.elements.kernel.value === "apostate";
   form.elements.userAgent.disabled = apostate;
   form.elements.userAgent.placeholder = apostate
-    ? "Set by the Apostate persona"
+    ? "Not supported by the Apostate kernel: its persona sets it"
     : "Default for this browser";
 }
 
@@ -88,7 +88,9 @@ function draft() {
     fingerprint: {
       locale: value("locale") || undefined,
       timezone: value("timezone") || undefined,
-      userAgent: value("userAgent") || undefined,
+      userAgent: form.elements.userAgent.disabled
+        ? undefined
+        : value("userAgent") || undefined,
     },
   };
 }

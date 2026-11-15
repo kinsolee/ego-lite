@@ -103,6 +103,14 @@ test("invalid input is rejected before anything is written", async () => {
     [{ ...BRAZIL, fingerprint: { timezone: "Mars/Olympus" } }, /timezone/],
     [{ ...BRAZIL, fingerprint: { locale: "not a locale" } }, /locale/],
     [{ ...BRAZIL, kernel: "firefox" }, /kernel/],
+    [
+      {
+        ...BRAZIL,
+        kernel: "apostate",
+        fingerprint: { ...BRAZIL.fingerprint, userAgent: "Mozilla/5.0 Custom" },
+      },
+      /Apostate kernel does not support a custom user agent/,
+    ],
   ];
   for (const [input, message] of invalid) {
     await assert.rejects(store.create(input), message);

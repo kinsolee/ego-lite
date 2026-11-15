@@ -17,6 +17,7 @@ export type Fingerprint = {
   seed: string;
   locale: string;
   timezone: string;
+  /** Built-in kernel only; an Apostate persona supplies its own. */
   userAgent?: string;
 };
 
@@ -153,10 +154,19 @@ function parseDraft(raw: unknown): ProfileDraft {
     throw new ProfileInputError(`timezone is not an IANA zone: ${timezone}`);
   }
 
+  const kernel = parseKernel(input.kernel);
   const userAgent = text(fingerprint.userAgent, "userAgent", false);
+  // Apostate has no switch for the User-Agent alone: its persona sets it with
+  // the Client Hints and navigator.platform, and Chromium's --user-agent would
+  // change the string while those stay the persona's.
+  if (userAgent && kernel === "apostate") {
+    throw new ProfileInputError(
+      "The Apostate kernel does not support a custom user agent: its persona sets the User-Agent and Client Hints together",
+    );
+  }
   return {
     name,
-    kernel: parseKernel(input.kernel),
+    kernel,
     proxy: parseProxy(input.proxy),
     locale,
     timezone,
