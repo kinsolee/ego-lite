@@ -171,6 +171,9 @@ in for the kernel binary and its CDP endpoint.
 - Built-in kernel: `download.cancel()` does not work. A page's debugger
   answers `Browser.cancelDownload` only for Electron's default session, so
   the shell fails it with a message saying the kernel does not support it.
+- Built-in kernel: a popup opened with `window.open` can read the host's
+  timezone, language and User-Agent Client Hints before the shell's CDP
+  overrides reach it. Use the Apostate kernel for shop profiles.
 - Apostate: a profile cannot set a user agent. The persona sets the
   User-Agent, Client Hints and `navigator.platform` together, and Apostate
   has no switch for the string alone.
