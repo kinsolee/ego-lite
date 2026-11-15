@@ -348,3 +348,48 @@ test("erasing a profile that is still quitting deletes its data after the proces
   assert.equal(alive(pid), false);
   await assert.rejects(access(userDataDir("br")), { code: "ENOENT" });
 });
+
+async function slowToStart(t) {
+  process.env.FAKE_APOSTATE_START_DELAY_MS = "300";
+  t.after(() => delete process.env.FAKE_APOSTATE_START_DELAY_MS);
+  return setup(t);
+}
+
+test("opening again after a release that cut a start short gets a live kernel", async (t) => {
+  const { backend, launched } = await slowToStart(t);
+
+  const first = backend.open("orders", "agent", profile());
+  await delay(50);
+  const releasing = backend.release("br");
+  const second = backend.open("mail", "agent", profile());
+  await first.catch(() => {});
+  await releasing;
+  const space = await second;
+
+  const { pid } = await launched("br");
+  assert.equal(alive(pid), true);
+  assert.equal(backend.running("br"), true);
+  assert.equal(space.tabs().length, 1);
+});
+
+test("an update made while the kernel starts applies once it is up", async (t) => {
+  const { backend, launched } = await slowToStart(t);
+
+  const opening = backend.open("orders", "agent", profile());
+  await delay(50);
+  const updating = backend.update(
+    profile({
+      fingerprint: {
+        seed: "seed-one",
+        locale: "pt-BR",
+        timezone: "America/Sao_Paulo",
+      },
+    }),
+  );
+  await Promise.allSettled([opening, updating]);
+
+  const { pid, tz } = await launched("br");
+  assert.equal(tz, "America/Recife");
+  assert.equal(alive(pid), false, "a kernel kept the old timezone");
+  assert.equal(backend.running("br"), false);
+});

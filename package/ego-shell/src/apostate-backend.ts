@@ -4,6 +4,7 @@ import path from "node:path";
 import { ApostateBrowser } from "./apostate-browser.js";
 import { launchApostate, type RunningKernel } from "./apostate-launcher.js";
 import { locateApostate, type KernelBinary } from "./kernel.js";
+import { ProfileQueue } from "./profile-queue.js";
 import type { Profile } from "./profile-store.js";
 import { startRelay, type Relay } from "./proxy-relay.js";
 import type {
@@ -36,7 +37,8 @@ export class ApostateBackend implements KernelBackend {
   readonly #host: SpaceHost;
   readonly #locate: () => Promise<KernelBinary>;
   readonly #running = new Map<string, RunningProfile>();
-  readonly #starting = new Map<string, Promise<RunningProfile>>();
+  /** Every open, update, release and erase of a profile runs in this queue, one at a time. */
+  readonly #queue = new ProfileQueue();
   /** Processes asked to quit that have not exited yet; they still own the data directory. */
   readonly #stopping = new Map<string, Promise<void>>();
   #binary: Promise<KernelBinary> | undefined;
@@ -53,74 +55,66 @@ export class ApostateBackend implements KernelBackend {
       options.locate ?? (() => locateApostate({ dataDir: options.dataDir }));
   }
 
-  async open(
-    name: string,
-    createdBy: Owner,
-    profile: Profile,
-  ): Promise<TaskSpace> {
-    const { browser } = await this.#start(profile);
-    return browser.createSpace(name, createdBy);
+  /** Start the profile's kernel unless it runs, then open a window in it. */
+  open(name: string, createdBy: Owner, profile: Profile): Promise<TaskSpace> {
+    return this.#queue.run(profile.id, async () => {
+      const running =
+        this.#running.get(profile.id) ?? (await this.#launch(profile));
+      return running.browser.createSpace(name, createdBy);
+    });
   }
 
   running(profileId: string): boolean {
     return this.#running.has(profileId) || this.#stopping.has(profileId);
   }
 
-  async update(profile: Profile): Promise<void> {
-    const running = this.#running.get(profile.id);
-    if (!running) return;
-    if (running.identity === launchIdentity(profile)) {
-      running.browser.profile = profile;
-      this.#host.changed();
-      return;
-    }
-    // A running process would keep its old exit address and persona.
-    await this.release(profile.id);
+  update(profile: Profile): Promise<void> {
+    return this.#queue.run(profile.id, async () => {
+      const running = this.#running.get(profile.id);
+      if (!running) return;
+      if (running.identity === launchIdentity(profile)) {
+        running.browser.profile = profile;
+        this.#host.changed();
+        return;
+      }
+      // A running process would keep its old exit address and persona.
+      await this.#stopNow(profile.id);
+    });
   }
 
-  async release(profileId: string): Promise<void> {
-    const starting = this.#starting.get(profileId);
-    if (starting) await starting.catch(() => {});
-    const running = this.#running.get(profileId);
-    if (running) this.#shutDown(profileId, running);
-    await this.#stopping.get(profileId);
+  release(profileId: string): Promise<void> {
+    return this.#queue.run(profileId, () => this.#stopNow(profileId));
   }
 
-  async erase(profileId: string): Promise<void> {
-    await this.release(profileId);
-    await rm(this.#userDataDir(profileId), { recursive: true, force: true });
+  erase(profileId: string): Promise<void> {
+    return this.#queue.run(profileId, async () => {
+      await this.#stopNow(profileId);
+      await rm(this.#userDataDir(profileId), { recursive: true, force: true });
+    });
   }
 
   async stop(): Promise<void> {
     const ids = new Set([
-      ...this.#starting.keys(),
+      ...this.#queue.busy(),
       ...this.#running.keys(),
       ...this.#stopping.keys(),
     ]);
     await Promise.allSettled([...ids].map((id) => this.release(id)));
   }
 
+  async #stopNow(profileId: string): Promise<void> {
+    const running = this.#running.get(profileId);
+    if (running) this.#shutDown(profileId, running);
+    await this.#stopping.get(profileId);
+  }
+
   #userDataDir(profileId: string): string {
     return path.join(this.#dataDir, "apostate-profiles", profileId);
   }
 
-  #start(profile: Profile): Promise<RunningProfile> {
-    const running = this.#running.get(profile.id);
-    if (running) return Promise.resolve(running);
-    let starting = this.#starting.get(profile.id);
-    if (!starting) {
-      const stopping = this.#stopping.get(profile.id);
-      starting = (
-        stopping
-          ? stopping.then(() => this.#launch(profile))
-          : this.#launch(profile)
-      ).finally(() => this.#starting.delete(profile.id));
-      this.#starting.set(profile.id, starting);
-    }
-    return starting;
-  }
-
   async #launch(profile: Profile): Promise<RunningProfile> {
+    // A kernel that quit on its own may still hold the data directory.
+    await this.#stopping.get(profile.id);
     // Hashing the kernel takes a moment, so one check serves the whole run.
     this.#binary ??= this.#locate();
     const binary = await this.#binary.catch((error) => {

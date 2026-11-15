@@ -31,6 +31,10 @@ const lock = path.join(userDataDir, "SingletonLock");
 rmSync(lock, { force: true });
 symlinkSync(`${hostname()}-${process.pid}`, lock);
 
+// FAKE_APOSTATE_START_DELAY_MS holds the port back that long, like a cold start.
+const startDelayMs = Number(process.env.FAKE_APOSTATE_START_DELAY_MS ?? 0);
+if (startDelayMs) await new Promise((resolve) => setTimeout(resolve, startDelayMs));
+
 if (mode === "cdp") {
   const { startFakeBrowser } = await import("./fake-cdp-browser.mjs");
   const browser = await startFakeBrowser();
