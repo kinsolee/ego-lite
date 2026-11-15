@@ -2,7 +2,6 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { StringDecoder } from "node:string_decoder";
 
 /** An error the agent sees as `{ error, error_code }`, per the native bindings contract. */
 export class EgoError extends Error {
@@ -41,34 +40,44 @@ export type AgentServer = {
   close(): Promise<void>;
 };
 
-/** Until hello: room for the hello line and little else. */
+/** Until hello, in bytes: room for the hello line and little else. */
 const UNAUTHENTICATED_LINE_LIMIT = 4 * 1024;
-/** After hello: a full-page screenshot as base64 fits in one CDP message. */
+/** After hello, in bytes: a full-page screenshot as base64 fits in one CDP message. */
 const AUTHENTICATED_LINE_LIMIT = 64 * 1024 * 1024;
 const HELLO_TIMEOUT_MS = 2_000;
+const NEWLINE = 0x0a;
 
 /**
  * Split a byte stream into newline-delimited JSON messages. A line longer than
- * `limit()` characters destroys the socket instead of buffering without end.
+ * `limit()` bytes destroys the socket instead of buffering without end.
  */
 export function readLines(
   socket: net.Socket,
   onLine: (line: string) => void,
   limit: () => number,
 ): void {
-  const decoder = new StringDecoder("utf8");
-  let pending = "";
-  socket.on("data", (chunk) => {
-    pending += decoder.write(chunk);
-    let end = pending.indexOf("\n");
+  // A newline byte never occurs inside a multi-byte UTF-8 sequence, so lines
+  // split on raw bytes and are decoded whole.
+  const parts: Buffer[] = [];
+  let size = 0;
+  socket.on("data", (chunk: Buffer) => {
+    let start = 0;
+    let end = chunk.indexOf(NEWLINE);
     while (end >= 0 && !socket.destroyed) {
-      const line = pending.slice(0, end);
-      pending = pending.slice(end + 1);
-      if (line.length > limit()) break;
+      size += end - start;
+      if (size > limit()) break;
+      parts.push(chunk.subarray(start, end));
+      const line = Buffer.concat(parts).toString("utf8");
+      parts.length = 0;
+      size = 0;
       if (line) onLine(line);
-      end = pending.indexOf("\n");
+      start = end + 1;
+      end = chunk.indexOf(NEWLINE, start);
     }
-    if (end >= 0 || pending.length > limit()) socket.destroy();
+    if (end >= 0) return void socket.destroy();
+    parts.push(chunk.subarray(start));
+    size += chunk.length - start;
+    if (size > limit()) socket.destroy();
   });
 }
 

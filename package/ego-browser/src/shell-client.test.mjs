@@ -43,6 +43,8 @@ async function startFakeShell(t, answer = () => null) {
           try {
             const value = answer(method, args, spaceId);
             if (value === FLOOD) socket.write("x".repeat(64 * 1024 * 1024 + 1));
+            else if (value === WIDE_FLOOD)
+              socket.write("é".repeat(32 * 1024 * 1024 + 1));
             else if (value !== HANG)
               reply({ t: "result", id, ok: true, value });
           } catch (error) {
@@ -96,6 +98,7 @@ async function startFakeShell(t, answer = () => null) {
 
 const HANG = Symbol("never answer");
 const FLOOD = Symbol("stream an endless line");
+const WIDE_FLOOD = Symbol("stream a line past the limit in bytes, not in characters");
 
 function runCli(script, env, args = []) {
   return new Promise((resolve, reject) => {
@@ -505,6 +508,24 @@ test(
     const { ego } = await connect(t, shell);
 
     assert.deepEqual(await ego.listTabs(), {
+      error: "ego-shell disconnected",
+      error_code: "EGO_BROWSER_UNAVAILABLE",
+    });
+  },
+);
+
+test(
+  "the line limit counts bytes, so 64 MiB of two-byte characters is dropped",
+  { timeout: 20_000 },
+  async (t) => {
+    const shell = await startFakeShell(t, () => WIDE_FLOOD);
+    const { ego } = await connect(t, shell);
+
+    const answer = await Promise.race([
+      ego.listTabs(),
+      new Promise((resolve) => setTimeout(resolve, 5_000, "still connected")),
+    ]);
+    assert.deepEqual(answer, {
       error: "ego-shell disconnected",
       error_code: "EGO_BROWSER_UNAVAILABLE",
     });

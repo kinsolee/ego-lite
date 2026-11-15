@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { StringDecoder } from "node:string_decoder";
 
 // ego-shell (package/ego-shell) serves the native bindings of
 // docs/native-bindings-api.md over a local socket. This module turns that
@@ -11,7 +10,8 @@ import { StringDecoder } from "node:string_decoder";
 
 const CONNECT_TIMEOUT_MS = 2000;
 /** A full-page screenshot as base64 fits in one message; ego-shell uses the same cap. */
-const MAX_LINE_LENGTH = 64 * 1024 * 1024;
+const MAX_LINE_BYTES = 64 * 1024 * 1024;
+const NEWLINE = 0x0a;
 const ENDPOINT_FILE = "agent-endpoint.json";
 
 const ASYNC_METHODS = [
@@ -222,19 +222,28 @@ export async function connectShellEgo(
     }
   };
 
-  const decoder = new StringDecoder("utf8");
-  let buffered = "";
-  socket.on("data", (chunk) => {
-    buffered += decoder.write(chunk);
-    let newline = buffered.indexOf("\n");
-    while (newline !== -1) {
-      const line = buffered.slice(0, newline);
-      buffered = buffered.slice(newline + 1);
-      if (line.length > MAX_LINE_LENGTH) break;
+  // A newline byte never occurs inside a multi-byte UTF-8 sequence, so lines
+  // split on raw bytes, count bytes against the limit and are decoded whole.
+  const parts: Buffer[] = [];
+  let size = 0;
+  socket.on("data", (chunk: Buffer) => {
+    let start = 0;
+    let newline = chunk.indexOf(NEWLINE);
+    while (newline !== -1 && !socket.destroyed) {
+      size += newline - start;
+      if (size > MAX_LINE_BYTES) break;
+      parts.push(chunk.subarray(start, newline));
+      const line = Buffer.concat(parts).toString("utf8");
+      parts.length = 0;
+      size = 0;
       if (line) onMessage(JSON.parse(line));
-      newline = buffered.indexOf("\n");
+      start = newline + 1;
+      newline = chunk.indexOf(NEWLINE, start);
     }
-    if (newline !== -1 || buffered.length > MAX_LINE_LENGTH) socket.destroy();
+    if (newline !== -1) return void socket.destroy();
+    parts.push(chunk.subarray(start));
+    size += chunk.length - start;
+    if (size > MAX_LINE_BYTES) socket.destroy();
   });
   socket.on("error", () => {});
   socket.on("close", () => {

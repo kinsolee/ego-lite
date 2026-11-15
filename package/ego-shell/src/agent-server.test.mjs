@@ -284,6 +284,22 @@ test(
 );
 
 test(
+  "the hello limit counts bytes, so 4 KiB of two-byte characters is enough",
+  { timeout: 5_000 },
+  async (t) => {
+    const { server } = await startServer(t);
+    const client = await dial(server.port);
+    t.after(client.close);
+    const started = Date.now();
+
+    client.write("é".repeat(2 * 1024 + 1));
+
+    await client.ended;
+    assert.ok(Date.now() - started < 1_000, "kept until the hello timeout");
+  },
+);
+
+test(
   "a client that never says hello is dropped after two seconds",
   { timeout: 5_000 },
   async (t) => {
