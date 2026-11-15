@@ -158,3 +158,17 @@ test("a profiles file written before kernels existed loads as electron", async (
   assert.equal(store.get(DEFAULT_PROFILE_ID).kernel, "electron");
   assert.equal(await readFile(file, "utf8"), text);
 });
+
+test("two saves at once both succeed and the file holds the later one", async () => {
+  const { file, store } = await openStore();
+  const created = await store.create(BRAZIL);
+  const at = (port) => ({ ...BRAZIL, proxy: { ...BRAZIL.proxy, port } });
+
+  await Promise.all([
+    store.update(created.id, at("1081")),
+    store.update(created.id, at("1082")),
+  ]);
+
+  const { profiles } = JSON.parse(await readFile(file, "utf8"));
+  assert.equal(profiles.find((p) => p.id === created.id).proxy.port, 1082);
+});

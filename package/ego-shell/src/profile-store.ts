@@ -204,6 +204,7 @@ function newSeed(): string {
 export class ProfileStore {
   readonly #file: string;
   #profiles: Profile[] = [];
+  #writing: Promise<void> = Promise.resolve();
 
   private constructor(file: string) {
     this.#file = file;
@@ -302,7 +303,18 @@ export class ProfileStore {
     await this.#save();
   }
 
-  async #save(): Promise<void> {
+  /**
+   * Write the profiles as they are now, after any write already under way.
+   * Every write goes through one temporary file, so two at once would rename
+   * it out from under each other.
+   */
+  #save(): Promise<void> {
+    const write = this.#writing.then(() => this.#write());
+    this.#writing = write.catch(() => {});
+    return write;
+  }
+
+  async #write(): Promise<void> {
     await mkdir(path.dirname(this.#file), { recursive: true });
     const temporary = `${this.#file}.${process.pid}.tmp`;
     await writeFile(
