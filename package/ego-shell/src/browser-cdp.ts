@@ -1,5 +1,16 @@
 export type CdpEvent = { method: string; params: any; sessionId?: string };
 
+/** How long the shell waits for a reply to a command it sends for its own bookkeeping. */
+export const COMMAND_TIMEOUT_MS = 15_000;
+
+/** The browser kept its socket open but never answered a command. */
+export class CdpTimeoutError extends Error {
+  constructor(method: string, timeoutMs: number) {
+    super(`The browser did not answer ${method} within ${timeoutMs} ms`);
+    this.name = "CdpTimeoutError";
+  }
+}
+
 type Pending = {
   resolve(result: any): void;
   reject(error: Error): void;
@@ -11,10 +22,16 @@ export class CdpConnection {
   readonly closed: Promise<void>;
   readonly #socket: WebSocket;
   readonly #pending = new Map<number, Pending>();
+  readonly #timeoutMs: number;
   #nextId = 1;
 
-  private constructor(socket: WebSocket, onEvent: (event: CdpEvent) => void) {
+  private constructor(
+    socket: WebSocket,
+    onEvent: (event: CdpEvent) => void,
+    timeoutMs: number,
+  ) {
     this.#socket = socket;
+    this.#timeoutMs = timeoutMs;
     socket.addEventListener("message", (message) => {
       const payload = JSON.parse(String(message.data));
       if (payload.id === undefined) {
@@ -40,10 +57,11 @@ export class CdpConnection {
   static connect(
     endpoint: string,
     onEvent: (event: CdpEvent) => void,
+    timeoutMs = COMMAND_TIMEOUT_MS,
   ): Promise<CdpConnection> {
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(endpoint);
-      const connection = new CdpConnection(socket, onEvent);
+      const connection = new CdpConnection(socket, onEvent, timeoutMs);
       socket.addEventListener("open", () => resolve(connection));
       socket.addEventListener("error", () =>
         reject(new Error("Could not connect to the browser's debugging port")),
@@ -51,17 +69,38 @@ export class CdpConnection {
     });
   }
 
+  /**
+   * Fails with `CdpTimeoutError` when no reply comes within `timeoutMs`, the
+   * connection's limit by default. `Infinity` waits for as long as it takes.
+   */
   send(
     method: string,
     params: Record<string, unknown> = {},
     sessionId?: string,
+    timeoutMs = this.#timeoutMs,
   ): Promise<any> {
     if (this.#socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("Browser connection closed"));
     }
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
+      const timer = Number.isFinite(timeoutMs)
+        ? setTimeout(() => {
+            this.#pending.delete(id);
+            reject(new CdpTimeoutError(method, timeoutMs));
+          }, timeoutMs)
+        : undefined;
+      const settle = () => clearTimeout(timer);
+      this.#pending.set(id, {
+        resolve: (result) => {
+          settle();
+          resolve(result);
+        },
+        reject: (error) => {
+          settle();
+          reject(error);
+        },
+      });
       this.#socket.send(JSON.stringify({ id, method, params, sessionId }));
     });
   }

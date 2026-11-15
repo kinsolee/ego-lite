@@ -3,7 +3,8 @@
 // profile directory's lock and announces a debugging port the way Chromium does.
 // FAKE_APOSTATE_MODE picks a failure: "exit" quits before announcing the port,
 // "silent" never announces it, "stubborn" ignores SIGTERM. "cdp" serves a
-// debugging socket that answers like a browser.
+// debugging socket that answers like a browser, except for the comma-separated
+// methods in FAKE_APOSTATE_HANG, which it never answers.
 import { hostname } from "node:os";
 import { rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -37,7 +38,9 @@ if (startDelayMs) await new Promise((resolve) => setTimeout(resolve, startDelayM
 
 if (mode === "cdp") {
   const { startFakeBrowser } = await import("./fake-cdp-browser.mjs");
-  const browser = await startFakeBrowser();
+  const browser = await startFakeBrowser({
+    hang: (process.env.FAKE_APOSTATE_HANG ?? "").split(",").filter(Boolean),
+  });
   writeFileSync(
     path.join(userDataDir, "DevToolsActivePort"),
     `${browser.port}\n/devtools/browser/fake`,

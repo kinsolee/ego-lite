@@ -25,13 +25,14 @@ function fakeHost() {
   };
 }
 
-async function setup(t) {
-  const chromium = await startFakeBrowser();
+async function setup(t, { hang, commandTimeoutMs } = {}) {
+  const chromium = await startFakeBrowser({ hang });
   const host = fakeHost();
   const browser = await ApostateBrowser.connect(
     chromium.endpoint,
     PROFILE,
     host,
+    commandTimeoutMs,
   );
   t.after(async () => {
     await browser.close();
@@ -584,4 +585,29 @@ test("closing the browser asks Chromium to quit", async (t) => {
 
   assert.equal(chromium.calls.at(-1).method, "Browser.close");
   assert.equal(host.spaces.size, 0);
+});
+
+test("an agent's command waits past the limit on the shell's own commands", async (t) => {
+  const { browser } = await setup(t, {
+    hang: ["Page.printToPDF", "Browser.cancelDownload"],
+    commandTimeoutMs: 50,
+  });
+  const space = await browser.createSpace("orders", "agent");
+  const agent = connect(space);
+  const [tab] = space.tabs();
+  const { result } = await agent.call("Target.attachToTarget", {
+    targetId: tab.targetId,
+    flatten: true,
+  });
+
+  const replies = [
+    agent.call("Page.printToPDF", {}, result.sessionId),
+    agent.call("Browser.cancelDownload", { guid: "G-RUNNING" }),
+  ];
+  const outcome = await Promise.race([
+    Promise.race(replies).then((reply) => reply),
+    delay(300).then(() => "still waiting"),
+  ]);
+
+  assert.equal(outcome, "still waiting");
 });

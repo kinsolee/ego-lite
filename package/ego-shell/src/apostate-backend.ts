@@ -2,6 +2,7 @@ import { rm } from "node:fs/promises";
 import path from "node:path";
 
 import { ApostateBrowser } from "./apostate-browser.js";
+import { CdpTimeoutError } from "./browser-cdp.js";
 import { launchApostate, type RunningKernel } from "./apostate-launcher.js";
 import { locateApostate, type KernelBinary } from "./kernel.js";
 import { ProfileQueue } from "./profile-queue.js";
@@ -36,6 +37,7 @@ export class ApostateBackend implements KernelBackend {
   readonly #dataDir: string;
   readonly #host: SpaceHost;
   readonly #locate: () => Promise<KernelBinary>;
+  readonly #commandTimeoutMs: number | undefined;
   readonly #running = new Map<string, RunningProfile>();
   /** Every open, update, release and erase of a profile runs in this queue, one at a time. */
   readonly #queue = new ProfileQueue();
@@ -48,8 +50,11 @@ export class ApostateBackend implements KernelBackend {
     dataDir: string;
     host: SpaceHost;
     locate?: () => Promise<KernelBinary>;
+    /** How long the shell waits for the kernel to answer one of its own commands. */
+    commandTimeoutMs?: number;
   }) {
     this.#dataDir = options.dataDir;
+    this.#commandTimeoutMs = options.commandTimeoutMs;
     this.#host = options.host;
     this.#locate =
       options.locate ?? (() => locateApostate({ dataDir: options.dataDir }));
@@ -60,7 +65,14 @@ export class ApostateBackend implements KernelBackend {
     return this.#queue.run(profile.id, async () => {
       const running =
         this.#running.get(profile.id) ?? (await this.#launch(profile));
-      return running.browser.createSpace(name, createdBy);
+      try {
+        return await running.browser.createSpace(name, createdBy);
+      } catch (error) {
+        // A kernel that holds its socket open but stops answering would keep
+        // the profile's queue, and every release behind it, waiting for good.
+        if (error instanceof CdpTimeoutError) await this.#stopNow(profile.id);
+        throw error;
+      }
     });
   }
 
@@ -139,6 +151,7 @@ export class ApostateBackend implements KernelBackend {
         kernel.endpoint,
         profile,
         this.#host,
+        this.#commandTimeoutMs,
       );
       const running: RunningProfile = {
         kernel,

@@ -393,3 +393,50 @@ test("an update made while the kernel starts applies once it is up", async (t) =
   assert.equal(alive(pid), false, "a kernel kept the old timezone");
   assert.equal(backend.running("br"), false);
 });
+
+test(
+  "a kernel that stops answering fails the open and is shut down with its relay",
+  { timeout: 10_000 },
+  async (t) => {
+    process.env.FAKE_APOSTATE_HANG = "Target.createTarget";
+    t.after(() => delete process.env.FAKE_APOSTATE_HANG);
+    const upstream = await startFakeSocks5({ username: "u", password: "p" });
+    t.after(() => upstream.close());
+    const { backend, host, launched } = await setup(t, {
+      commandTimeoutMs: 200,
+    });
+
+    const opening = backend.open(
+      "orders",
+      "agent",
+      profile({
+        proxy: {
+          scheme: "socks5",
+          host: "127.0.0.1",
+          port: upstream.port,
+          username: "u",
+          password: "p",
+        },
+      }),
+    );
+    const outcome = await Promise.race([
+      opening.then(
+        () => "opened",
+        (error) => error,
+      ),
+      delay(3_000).then(() => "still waiting"),
+    ]);
+    const { pid, argv } = await launched("br");
+    if (typeof outcome === "string") process.kill(pid, "SIGKILL");
+
+    assert.match(
+      String(outcome?.message),
+      /did not answer Target\.createTarget/,
+    );
+    await backend.release("br");
+    assert.equal(alive(pid), false);
+    assert.equal(await listening(relayPort(argv)), false);
+    assert.equal(backend.running("br"), false);
+    assert.equal(host.spaces.size, 0);
+  },
+);

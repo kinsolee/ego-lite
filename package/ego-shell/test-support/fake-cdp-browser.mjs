@@ -4,7 +4,8 @@ import { WebSocketServer } from "ws";
 
 const SESSION_NOT_FOUND = "Session with given id not found.";
 
-export async function startFakeBrowser() {
+/** `hang` names methods the browser takes in and never answers. */
+export async function startFakeBrowser({ hang = [] } = {}) {
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise((resolve) => server.once("listening", resolve));
 
@@ -153,6 +154,7 @@ export async function startFakeBrowser() {
     connection.on("message", (data) => {
       const { id, method, params = {}, sessionId } = JSON.parse(String(data));
       calls.push({ method, params, sessionId });
+      if (hang.includes(method)) return;
       try {
         const result = sessionId
           ? sessionCommand(method, params, sessionId)

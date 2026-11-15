@@ -101,12 +101,18 @@ class ApostateTab implements TaskTab {
   ): Promise<unknown> {
     // The highlight is drawn by the browser and would appear in the capture.
     if (method === "Page.captureScreenshot") await this.hideHighlight();
-    return this.#connection.send(method, params, sessionId ?? this.#session);
+    // An agent's command may rightly take long; the agent decides how long to wait.
+    return this.#connection.send(
+      method,
+      params,
+      sessionId ?? this.#session,
+      Infinity,
+    );
   }
 
   /** Attach to the tab's out-of-process frames, as agents expect them announced. */
   async watchFrames(): Promise<void> {
-    await this.send("Target.setAutoAttach", FRAME_AUTO_ATTACH).catch(() => {});
+    await this.#watchNested(this.#session);
   }
 
   /** Whether the tab is the one its window shows; undefined when it cannot say. */
@@ -360,11 +366,16 @@ export class ApostateBrowser {
     endpoint: string,
     profile: Profile,
     host: SpaceHost,
+    commandTimeoutMs?: number,
   ): Promise<ApostateBrowser> {
     let browser: ApostateBrowser | undefined;
-    const connection = await CdpConnection.connect(endpoint, (event) => {
-      if (browser) browser.#handle(event);
-    });
+    const connection = await CdpConnection.connect(
+      endpoint,
+      (event) => {
+        if (browser) browser.#handle(event);
+      },
+      commandTimeoutMs,
+    );
     browser = new ApostateBrowser(connection, profile, host);
     await connection.send("Target.setDiscoverTargets", { discover: true });
     return browser;
@@ -450,9 +461,9 @@ export class ApostateBrowser {
     this.#host.changed();
   }
 
-  /** A command for the browser itself rather than one of its pages. */
+  /** An agent's command for the browser itself rather than one of its pages. */
   send(method: string, params: Record<string, unknown>): Promise<unknown> {
-    return this.#connection.send(method, params);
+    return this.#connection.send(method, params, undefined, Infinity);
   }
 
   /** Ask the browser to quit, and give it a moment to do so on its own. */
