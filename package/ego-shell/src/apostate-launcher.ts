@@ -77,7 +77,7 @@ export async function launchApostate(
   await rm(path.join(userDataDir, PORT_FILE), { force: true });
 
   const child = spawn(launch.executable, apostateArguments(launch), {
-    env: { ...(launch.env ?? process.env), TZ: launch.timezone },
+    env: kernelEnvironment(launch),
     stdio: "ignore",
   });
   let outcome: string | undefined;
@@ -116,6 +116,21 @@ export async function launchApostate(
     }
     await delay(POLL_MS);
   }
+}
+
+// The kernel's only route out is the profile's relay; anything in it that read
+// the shell's proxy settings would leave by another exit.
+const PROXY_VARIABLES = ["http_proxy", "https_proxy", "all_proxy", "no_proxy"];
+
+function kernelEnvironment(launch: KernelLaunch): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...(launch.env ?? process.env),
+    TZ: launch.timezone,
+  };
+  for (const name of Object.keys(env)) {
+    if (PROXY_VARIABLES.includes(name.toLowerCase())) delete env[name];
+  }
+  return env;
 }
 
 async function readEndpoint(userDataDir: string): Promise<string | undefined> {

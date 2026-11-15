@@ -18,7 +18,12 @@ const mode = process.env.FAKE_APOSTATE_MODE ?? "";
 
 writeFileSync(
   path.join(userDataDir, "launch.json"),
-  JSON.stringify({ argv, tz: process.env.TZ, pid: process.pid }),
+  JSON.stringify({
+    argv,
+    tz: process.env.TZ,
+    pid: process.pid,
+    proxyEnv: Object.keys(process.env).filter((name) => /_proxy$/i.test(name)),
+  }),
 );
 if (mode === "exit") process.exit(3);
 

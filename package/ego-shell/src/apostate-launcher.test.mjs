@@ -182,3 +182,18 @@ test("a lock naming an unrelated live process is left alone", async (t) => {
   t.after(() => next.stop());
   assert.equal(alive(other.pid), true);
 });
+
+test("proxy settings in the shell's environment do not reach the kernel", async (t) => {
+  const userDataDir = await profileDir(t);
+  const inherited = {};
+  for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
+    inherited[name] = "http://corp-proxy.test:3128";
+    inherited[name.toLowerCase()] = "http://corp-proxy.test:3128";
+  }
+  const kernel = await launchApostate(
+    launchOptions(userDataDir, { env: { ...process.env, ...inherited } }),
+  );
+  t.after(() => kernel.stop());
+
+  assert.deepEqual((await recorded(userDataDir)).proxyEnv, []);
+});
