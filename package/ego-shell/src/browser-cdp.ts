@@ -62,10 +62,20 @@ export class CdpConnection {
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(endpoint);
       const connection = new CdpConnection(socket, onEvent, timeoutMs);
-      socket.addEventListener("open", () => resolve(connection));
-      socket.addEventListener("error", () =>
-        reject(new Error("Could not connect to the browser's debugging port")),
-      );
+      // A kernel can accept the connection and never finish the handshake.
+      const timer = setTimeout(() => {
+        // Closing fires the error listener synchronously, so reject first.
+        reject(new CdpTimeoutError("the WebSocket handshake", timeoutMs));
+        socket.close();
+      }, timeoutMs);
+      socket.addEventListener("open", () => {
+        clearTimeout(timer);
+        resolve(connection);
+      });
+      socket.addEventListener("error", () => {
+        clearTimeout(timer);
+        reject(new Error("Could not connect to the browser's debugging port"));
+      });
     });
   }
 

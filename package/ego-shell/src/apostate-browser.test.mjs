@@ -611,3 +611,21 @@ test("an agent's command waits past the limit on the shell's own commands", asyn
 
   assert.equal(outcome, "still waiting");
 });
+
+test("a kernel that accepts the debugging socket but never finishes the handshake times out", async () => {
+  const { createServer } = await import("node:net");
+  const { CdpConnection, CdpTimeoutError } = await import("../dist/browser-cdp.js");
+  const held = [];
+  const server = createServer((socket) => held.push(socket));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address();
+    await assert.rejects(
+      CdpConnection.connect(`ws://127.0.0.1:${port}/devtools/browser/x`, () => {}, 200),
+      CdpTimeoutError,
+    );
+  } finally {
+    for (const socket of held) socket.destroy();
+    server.close();
+  }
+});
