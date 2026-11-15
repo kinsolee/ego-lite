@@ -55,8 +55,12 @@ async function startFakeShell(t, answer = () => null) {
               error_code: "EGO_TASK_SPACE_NOT_SELECTED",
             });
           } else {
-            const { id } = JSON.parse(message.message);
-            reply({ t: "cdp", message: JSON.stringify({ id, result: {} }) });
+            const { id, method } = JSON.parse(message.message);
+            const result =
+              method === "Target.attachToTarget"
+                ? { sessionId: `session-${message.spaceId}` }
+                : {};
+            reply({ t: "cdp", message: JSON.stringify({ id, result }) });
           }
         }
       }
@@ -360,5 +364,42 @@ test("the CLI reports an unreachable explicit endpoint instead of running withou
     new RegExp(
       `Cannot reach ego-shell through EGO_SHELL_ENDPOINT=${missing.replaceAll(".", "\\.")}`,
     ),
+  );
+});
+
+test("switching task spaces within one CLI round attaches a fresh session in the new space", async (t) => {
+  const shell = await startFakeShell(t, (method, _args, spaceId) => {
+    if (method === "listTabs") {
+      return { tabs: [{ targetId: `tab-${spaceId}`, active: true }] };
+    }
+    if (method === "getBrowserVersion") {
+      return { currentVersion: "0.1.0", updateAvailable: false };
+    }
+    return null;
+  });
+
+  const { code, stderr } = await runCli(
+    [
+      "ego.useTaskSpace(1)",
+      "await cdp('Runtime.evaluate', { expression: '1' })",
+      "ego.useTaskSpace(2)",
+      "await cdp('Runtime.evaluate', { expression: '2' })",
+    ].join("\n"),
+    {
+      EGO_SHELL_ENDPOINT: shell.endpointFile,
+      EGO_BROWSER_STATE_DIR: path.join(shell.directory, "state"),
+    },
+  );
+
+  assert.equal(code, 0, stderr);
+  const evaluations = shell.cdp
+    .map(({ spaceId, message }) => ({ spaceId, ...JSON.parse(message) }))
+    .filter(({ method }) => method === "Runtime.evaluate");
+  assert.deepEqual(
+    evaluations.map(({ spaceId, sessionId }) => ({ spaceId, sessionId })),
+    [
+      { spaceId: 1, sessionId: "session-1" },
+      { spaceId: 2, sessionId: "session-2" },
+    ],
   );
 });
