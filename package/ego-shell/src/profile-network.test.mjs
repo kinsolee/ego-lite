@@ -98,3 +98,48 @@ test("a proxied profile runs through one relay, replaced on update and closed on
   assert.equal(networks.live().length, 0);
   assert.deepEqual(session.userAgent, ["UA", "pt-BR,pt"]);
 });
+
+test("two updates at once leave one relay open, the one in force", async () => {
+  const { networks, openRelays, proxyPort } = setup();
+  await networks.start(profile(1080));
+
+  await Promise.all([
+    networks.update(profile(1081)),
+    networks.update(profile(1082)),
+  ]);
+
+  assert.deepEqual(
+    openRelays().map((relay) => relay.upstream),
+    [1082],
+  );
+  assert.equal(proxyPort(), openRelays()[0].port);
+  assert.equal(networks.live()[0].profile.proxy.port, 1082);
+});
+
+test("a release during an update leaves no relay open and nothing live", async () => {
+  const { networks, openRelays } = setup();
+  await networks.start(profile(1080));
+
+  const updating = networks.update(profile(1081));
+  await networks.release("br");
+  await updating;
+
+  assert.equal(openRelays().length, 0);
+  assert.equal(networks.live().length, 0);
+});
+
+test("a start after a release runs on a fresh entry", async () => {
+  const { networks, openRelays } = setup();
+  const first = await networks.start(profile(1080));
+
+  const releasing = networks.release("br");
+  const again = await networks.start(profile(1081));
+  await releasing;
+
+  assert.notEqual(again, first);
+  assert.deepEqual(
+    openRelays().map((relay) => relay.upstream),
+    [1081],
+  );
+  assert.equal(networks.live()[0], again);
+});

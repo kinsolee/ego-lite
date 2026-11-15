@@ -1,4 +1,5 @@
 import type { Profile, ProxyConfig } from "./profile-store.js";
+import { ProfileQueue } from "./profile-queue.js";
 import { sessionProxyConfig, type SessionProxyConfig } from "./proxy-config.js";
 import type { Relay } from "./proxy-relay.js";
 import type { TabOverrides } from "./tab.js";
@@ -29,7 +30,8 @@ export type NetworkDeps<S> = {
 export class ProfileNetworks<S extends NetworkSession> {
   readonly #deps: NetworkDeps<S>;
   readonly #entries = new Map<string, Entry<S>>();
-  readonly #starting = new Map<string, Promise<Entry<S>>>();
+  /** Every start, update, release and erase of a profile runs in this queue, one at a time. */
+  readonly #queue = new ProfileQueue();
 
   constructor(deps: NetworkDeps<S>) {
     this.#deps = deps;
@@ -40,54 +42,55 @@ export class ProfileNetworks<S extends NetworkSession> {
   }
 
   /** Bring the profile's session up. Resolves only once the proxy is in force. */
-  async start(profile: Profile): Promise<LiveProfile<S>> {
-    const live = this.#entries.get(profile.id);
-    if (live) return live;
-    let starting = this.#starting.get(profile.id);
-    if (!starting) {
-      starting = this.#start(profile).finally(() =>
-        this.#starting.delete(profile.id),
-      );
-      this.#starting.set(profile.id, starting);
-    }
-    return starting;
+  start(profile: Profile): Promise<LiveProfile<S>> {
+    return this.#queue.run(
+      profile.id,
+      async () => this.#entries.get(profile.id) ?? this.#start(profile),
+    );
   }
 
   /** Re-apply an edited profile to its running session, if it has one. */
-  async update(profile: Profile): Promise<LiveProfile<S> | undefined> {
-    await this.#starting.get(profile.id)?.catch(() => {});
-    const entry = this.#entries.get(profile.id);
-    if (!entry) return undefined;
-    const previous = entry.relay;
-    await this.#applyNetwork(entry, profile);
-    await previous?.close();
-    return entry;
+  update(profile: Profile): Promise<LiveProfile<S> | undefined> {
+    return this.#queue.run(profile.id, async () => {
+      const entry = this.#entries.get(profile.id);
+      if (!entry) return undefined;
+      const previous = entry.relay;
+      await this.#applyNetwork(entry, profile);
+      await previous?.close();
+      return entry;
+    });
   }
 
   /** Stop the profile's relay; its session data stays on disk. */
-  async release(profileId: string): Promise<void> {
-    await this.#starting.get(profileId)?.catch(() => {});
-    const entry = this.#entries.get(profileId);
-    this.#entries.delete(profileId);
-    await entry?.relay?.close();
+  release(profileId: string): Promise<void> {
+    return this.#queue.run(profileId, () => this.#drop(profileId));
   }
 
   /** Stop the profile and hand its session to `clear`. */
-  async erase(
+  erase(
     profileId: string,
     clear: (session: S) => Promise<void>,
   ): Promise<void> {
-    await this.#starting.get(profileId)?.catch(() => {});
-    const entry = this.#entries.get(profileId);
-    this.#entries.delete(profileId);
-    await clear(entry?.session ?? this.#deps.session(profileId));
-    await entry?.relay?.close();
+    return this.#queue.run(profileId, async () => {
+      const session =
+        this.#entries.get(profileId)?.session ?? this.#deps.session(profileId);
+      try {
+        await clear(session);
+      } finally {
+        await this.#drop(profileId);
+      }
+    });
   }
 
   async stop(): Promise<void> {
-    const entries = [...this.#entries.values()];
-    this.#entries.clear();
-    await Promise.all(entries.map((entry) => entry.relay?.close()));
+    const ids = new Set([...this.#entries.keys(), ...this.#queue.busy()]);
+    await Promise.allSettled([...ids].map((id) => this.release(id)));
+  }
+
+  async #drop(profileId: string): Promise<void> {
+    const entry = this.#entries.get(profileId);
+    this.#entries.delete(profileId);
+    await entry?.relay?.close();
   }
 
   async #start(profile: Profile): Promise<Entry<S>> {
