@@ -111,9 +111,16 @@ anti-detect browsers recognise it. The port is `--remote-debugging-port=0`,
 read back from `DevToolsActivePort`. A kernel left over from a crashed shell is
 stopped before the profile starts again.
 
-The shell enables no CDP domain on the session an agent drives. The mouse
-highlight is drawn by the browser's overlay on a second session, so the page's
-DOM is untouched.
+The shell enables no CDP domain on the session an agent drives.
+
+## The mouse highlight
+
+`animationHighlightMouseToPosition` draws a shrinking square with the
+browser's own overlay (`Overlay.highlightRect`) on the active tab, so the
+page's DOM is untouched. It runs on a second CDP session of the tab, on
+either kernel, so that the DOM and Overlay domains it enables never reach the
+session an agent drives (`src/mouse-highlight.ts`). It is hidden before a
+screenshot.
 
 ## Layout
 
@@ -153,8 +160,7 @@ in for the kernel binary and its CDP endpoint.
 - The relay accepts any local process that finds its port.
 - Built-in kernel: downloads and permission prompts have no UI, and
   permissions other than fullscreen, pointer lock and clipboard write are
-  denied. `animationHighlightMouseToPosition` succeeds without drawing
-  anything. Canvas, WebGL, audio, fonts and ClientRects are the host's own.
+  denied. Canvas, WebGL, audio, fonts and ClientRects are the host's own.
 - Apostate: a profile cannot set a user agent. The persona sets the
   User-Agent, Client Hints and `navigator.platform` together, and Apostate
   has no switch for the string alone. Editing a running profile's proxy, seed, locale or timezone stops its

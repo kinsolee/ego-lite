@@ -126,8 +126,9 @@ export class Space extends TaskSpace {
     this.publish();
   }
 
-  /** Stock Electron has no overlay to draw on; the patched kernel does. */
-  async highlightMouse(): Promise<void> {}
+  async highlightMouse(x: number, y: number): Promise<void> {
+    await this.#active?.highlight(x, y);
+  }
 
   /** Apply the profile's edited locale, timezone and user agent to open tabs. */
   async refreshOverrides(): Promise<void> {

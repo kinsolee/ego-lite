@@ -6,6 +6,7 @@ import {
   type TargetInfo,
 } from "./cdp-router.js";
 import type { UserAgentOverride } from "./fingerprint.js";
+import { MouseHighlight } from "./mouse-highlight.js";
 
 export type TabOverrides = {
   timezone: string;
@@ -27,8 +28,6 @@ export type TabEvents = {
   popup(opener: Tab, view: WebContentsView): void;
 };
 
-// Only iframes are attached: workers share the frame's process-wide overrides.
-/** One browser tab of a profile: a web view plus the CDP session that drives it. */
 /**
  * A tab's children start paused so the overrides are in place before any of
  * their script runs. Chromium pauses workers as well, even when a filter hides
@@ -40,6 +39,7 @@ const PAUSED_AUTO_ATTACH = {
   flatten: true,
 };
 
+/** One browser tab of a profile: a web view plus the CDP session that drives it. */
 export class Tab implements RoutedTab {
   readonly view: WebContentsView;
   targetId = "";
@@ -50,6 +50,17 @@ export class Tab implements RoutedTab {
   /** Sessions of workers and other children agents are not told about. */
   readonly #unannounced = new Set<string>();
   #overrides: TabOverrides;
+  readonly #highlight = new MouseHighlight({
+    attach: async () => {
+      const { sessionId } = await this.webContents.debugger.sendCommand(
+        "Target.attachToTarget",
+        { targetId: this.targetId, flatten: true },
+      );
+      return sessionId;
+    },
+    send: (method, params, sessionId) =>
+      this.webContents.debugger.sendCommand(method, params, sessionId),
+  });
 
   private constructor(
     view: WebContentsView,
@@ -146,7 +157,16 @@ export class Tab implements RoutedTab {
     const contents = this.webContents;
     if (contents.isDestroyed()) throw new Error("Target closed");
     if (!contents.debugger.isAttached()) await this.#attach();
+    // The highlight is drawn by the browser and would appear in the capture.
+    if (method === "Page.captureScreenshot") await this.#highlight.hide();
     return contents.debugger.sendCommand(method, params, sessionId);
+  }
+
+  /** Show where the agent is about to act, in viewport CSS pixels. */
+  async highlight(x: number, y: number): Promise<void> {
+    if (this.webContents.isDestroyed()) return;
+    if (!this.webContents.debugger.isAttached()) await this.#attach();
+    await this.#highlight.show(x, y);
   }
 
   async applyOverrides(overrides: TabOverrides): Promise<void> {
@@ -160,6 +180,7 @@ export class Tab implements RoutedTab {
 
   /** Undo page state an agent left behind so a person can use the tab normally. */
   async releaseAgentState(): Promise<void> {
+    await this.#highlight.hide();
     await this.send("Page.setInterceptFileChooserDialog", {
       enabled: false,
     }).catch(() => {});
@@ -204,6 +225,7 @@ export class Tab implements RoutedTab {
   async #attach(): Promise<void> {
     this.#children.clear();
     this.#unannounced.clear();
+    this.#highlight.reset();
     this.webContents.debugger.attach("1.3");
     await this.#emulate(undefined);
     await this.webContents.debugger.sendCommand(
@@ -227,8 +249,11 @@ export class Tab implements RoutedTab {
   }
 
   #onMessage(method: string, params: any, sessionId: string | undefined): void {
+    if (this.#highlight.owns(sessionId)) return;
     const hidden = sessionId !== undefined && this.#unannounced.has(sessionId);
     if (method === "Target.attachedToTarget") {
+      // The highlight's own session on this page, announced on the main one.
+      if (params.targetInfo.targetId === this.targetId) return;
       // A worker's own workers are paused too and need the same resume.
       if (hidden || params.targetInfo.type !== "iframe") {
         this.#unannounced.add(params.sessionId);
@@ -245,6 +270,10 @@ export class Tab implements RoutedTab {
       // The shell resumes the frame itself, so clients must not wait on it.
       params = { ...params, waitingForDebugger: false };
     } else if (method === "Target.detachedFromTarget") {
+      if (this.#highlight.owns(params.sessionId)) {
+        this.#highlight.reset();
+        return;
+      }
       if (this.#unannounced.delete(params.sessionId)) return;
       this.#forget(params.sessionId);
     }

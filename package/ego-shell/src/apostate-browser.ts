@@ -1,5 +1,6 @@
 import { CdpConnection, type CdpEvent } from "./browser-cdp.js";
 import { type ChildTarget, type TargetInfo } from "./cdp-router.js";
+import { MouseHighlight } from "./mouse-highlight.js";
 import type { Profile } from "./profile-store.js";
 import {
   TaskSpace,
@@ -8,7 +9,6 @@ import {
   type TaskTab,
 } from "./task-space.js";
 
-/** Side lengths, in CSS pixels, of the square drawn where the agent acts. */
 /**
  * Announces a tab's out-of-process frames. Nothing starts paused: the kernel
  * needs no setup in a frame, and Chromium would pause the page's workers too
@@ -21,11 +21,6 @@ const FRAME_AUTO_ATTACH = {
   filter: [{ type: "iframe" }],
 };
 
-const HIGHLIGHT_SIZES = [44, 30, 20];
-const HIGHLIGHT_STEP_MS = 130;
-const HIGHLIGHT_HOLD_MS = 450;
-const HIGHLIGHT_FILL = { r: 255, g: 96, b: 48, a: 0.35 };
-const HIGHLIGHT_OUTLINE = { r: 255, g: 96, b: 48, a: 0.9 };
 const CLOSE_WAIT_MS = 3_000;
 
 /** What Chromium reports for a target; only the fields the shell reads. */
@@ -41,15 +36,7 @@ class ApostateTab implements TaskTab {
   readonly #sessions: Map<string, ApostateTab>;
   readonly #children = new Map<string, ChildTarget>();
   #info: ChromiumTarget;
-  /**
-   * The highlight needs the DOM and Overlay domains enabled. It gets a session
-   * of its own so that neither shows up in, or is switched off by, the session
-   * agents drive.
-   */
-  #overlay: Promise<string> | undefined;
-  #overlaySession: string | undefined;
-  #highlighted = false;
-  #highlightTimer: NodeJS.Timeout | undefined;
+  readonly #highlight: MouseHighlight;
 
   constructor(options: {
     connection: CdpConnection;
@@ -65,6 +52,18 @@ class ApostateTab implements TaskTab {
     this.#session = options.session;
     this.#sessions = options.sessions;
     this.#sessions.set(this.#session, this);
+    this.#highlight = new MouseHighlight({
+      attach: async () => {
+        const { sessionId } = await this.#connection.send(
+          "Target.attachToTarget",
+          { targetId: this.targetId, flatten: true },
+        );
+        this.#sessions.set(sessionId, this);
+        return sessionId;
+      },
+      send: (method, params, sessionId) =>
+        this.#connection.send(method, params, sessionId),
+    });
   }
 
   targetInfo(): TargetInfo {
@@ -113,7 +112,7 @@ class ApostateTab implements TaskTab {
   }
 
   handleEvent(method: string, params: any, sessionId: string): void {
-    if (sessionId === this.#overlaySession) return;
+    if (this.#highlight.owns(sessionId)) return;
     const parent = sessionId === this.#session ? undefined : sessionId;
     if (method === "Target.attachedToTarget") {
       this.#children.set(params.sessionId, {
@@ -130,90 +129,21 @@ class ApostateTab implements TaskTab {
     this.space.tabEvent(this, method, params, parent);
   }
 
-  async highlight(x: number, y: number): Promise<void> {
-    this.#overlay ??= this.#openOverlay().catch((error) => {
-      this.#overlay = undefined;
-      throw error;
-    });
-    const session = await this.#overlay;
-    const scale = await this.#overlayScale(session);
-    const draw = (size: number) =>
-      this.#connection.send(
-        "Overlay.highlightRect",
-        {
-          x: Math.round((x - size / 2) / scale),
-          y: Math.round((y - size / 2) / scale),
-          width: Math.round(size / scale),
-          height: Math.round(size / scale),
-          color: HIGHLIGHT_FILL,
-          outlineColor: HIGHLIGHT_OUTLINE,
-        },
-        session,
-      );
-    clearTimeout(this.#highlightTimer);
-    await draw(HIGHLIGHT_SIZES[0]!);
-    this.#highlighted = true;
-    let step = 1;
-    const next = () => {
-      const size = HIGHLIGHT_SIZES[step++];
-      if (size === undefined) {
-        void this.hideHighlight();
-        return;
-      }
-      draw(size).catch(() => {});
-      const last = step === HIGHLIGHT_SIZES.length;
-      this.#highlightTimer = setTimeout(
-        next,
-        last ? HIGHLIGHT_HOLD_MS : HIGHLIGHT_STEP_MS,
-      );
-    };
-    this.#highlightTimer = setTimeout(next, HIGHLIGHT_STEP_MS);
+  highlight(x: number, y: number): Promise<void> {
+    return this.#highlight.show(x, y);
   }
 
-  async hideHighlight(): Promise<void> {
-    clearTimeout(this.#highlightTimer);
-    if (!this.#highlighted) return;
-    this.#highlighted = false;
-    await this.#connection
-      .send("Overlay.hideHighlight", {}, this.#overlaySession)
-      .catch(() => {});
+  hideHighlight(): Promise<void> {
+    return this.#highlight.hide();
   }
 
   /** The target is gone: stop routing its sessions. */
   dispose(): void {
-    clearTimeout(this.#highlightTimer);
-    this.#sessions.delete(this.#session);
-    if (this.#overlaySession) this.#sessions.delete(this.#overlaySession);
-    for (const sessionId of this.#children.keys()) {
-      this.#sessions.delete(sessionId);
+    this.#highlight.reset();
+    for (const [sessionId, tab] of this.#sessions) {
+      if (tab === this) this.#sessions.delete(sessionId);
     }
     this.#children.clear();
-  }
-
-  /**
-   * How many times larger the browser draws a highlight than the page pixels
-   * it is given: the display's scale, 2 on a Retina screen.
-   */
-  async #overlayScale(session: string): Promise<number> {
-    const metrics = await this.#connection
-      .send("Page.getLayoutMetrics", {}, session)
-      .catch(() => undefined);
-    const scale =
-      metrics?.visualViewport?.clientWidth /
-      metrics?.cssVisualViewport?.clientWidth;
-    return scale > 0 && Number.isFinite(scale) ? scale : 1;
-  }
-
-  async #openOverlay(): Promise<string> {
-    const { sessionId } = await this.#connection.send("Target.attachToTarget", {
-      targetId: this.targetId,
-      flatten: true,
-    });
-    this.#overlaySession = sessionId;
-    this.#sessions.set(sessionId, this);
-    await this.#connection.send("DOM.enable", {}, sessionId);
-    await this.#connection.send("Overlay.enable", {}, sessionId);
-    return sessionId;
   }
 
   async #watchNested(sessionId: string): Promise<void> {
