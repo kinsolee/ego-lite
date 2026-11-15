@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { PageLedgerStore, runtimeInstanceId } from "../dist/src/page-ledger.js";
+import { state } from "../dist/src/state.js";
 
 test("runtimeInstanceId is a pure browser-host identifier", () => {
   const first = runtimeInstanceId(42);
@@ -19,6 +20,16 @@ test("runtimeInstanceId is a pure browser-host identifier", () => {
 
   assert.equal(second, first);
   assert.equal(first, "browser-host:42");
+});
+
+test("runtimeInstanceId names a browser host that is not the CLI's parent", (t) => {
+  t.after(() => {
+    state.browserHostPid = null;
+  });
+  assert.equal(runtimeInstanceId(), `browser-host:${process.ppid}`);
+
+  state.browserHostPid = 4242;
+  assert.equal(runtimeInstanceId(), "browser-host:4242");
 });
 
 async function withTempLedger(fn) {

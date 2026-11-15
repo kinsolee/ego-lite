@@ -11,6 +11,7 @@ This repo contains the open-source harness and the agent skill package — **not
 - `package/ego-browser/src/index.ts` is the entrypoint with two startup paths:
   - Executed directly as a CLI → `runMain()` (reads JavaScript from stdin, executes it).
   - Imported as a module (how the app embeds it) → `installEgoSdk(globalThis)`.
+- The standalone CLI has no native bindings of its own. When `globalThis.ego` is absent, `src/shell-client.ts` connects to a running `package/ego-shell` (the endpoint file named by `EGO_SHELL_ENDPOINT`, else the shell's default user-data path) and installs an `ego` object that forwards every binding over that socket. Nothing past this boundary knows which host it talks to.
 - Both paths expose the same helper surface. `public-api-schema.ts` is the
   source of truth for the v2 API shown by `help()`;
   `helpers.ts` combines it with the frozen v1 compatibility surface.
@@ -40,6 +41,7 @@ Task spaces are isolated browsing contexts with an ownership model (`agent` / `u
 ## Key Directories
 
 - `package/ego-browser/src/` — runtime, helpers, resolver, drivers, learning subsystem.
+- `package/ego-shell/` — open-source Electron host that implements the `globalThis.ego` bindings: profiles with isolated sessions, a per-profile proxy relay, task-space windows, and the agent bridge. See its `README.md`; run `npm test` there for its own suite.
 - `package/ego-browser/src/**/*.test.mjs` — tests are colocated with the code (there is no separate `test/` directory).
 - `package/ego-browser/scripts/` — `build.mjs` (esbuild per-file → `dist/src`, rollup bundle → `dist/out/index.js`, renders `skill-body/SKILL.md` via `render-guide.mjs` → `dist/out/ego-browser/SKILL.md` plus `SKILL.macos.md` / `SKILL.windows.md`, selecting `<!-- platform: ... -->` blocks and adding version and end markers, copies the entry Skill and its learnings → `dist/out/agent-skills/ego-browser`), `validate-site-skills.ts`, and the real-browser E2E runner.
 - `package/ego-browser/skill-body/SKILL.md` — canonical agent-facing usage guide, printed by `ego-browser skill`.

@@ -1,0 +1,22 @@
+{
+  "name": "ego-shell",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Electron shell that gives ego-browser isolated, proxied browser profiles",
+  "type": "module",
+  "main": "dist/main.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "npm run build && electron .",
+    "test": "npm run build && node --test \"src/**/*.test.mjs\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "electron": "^45.3.2",
+    "typescript": "^5.8.3",
+    "ws": "^8.23.0"
+  }
+}
