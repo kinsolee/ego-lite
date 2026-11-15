@@ -57,29 +57,43 @@ function reader(socket) {
   };
 }
 
-export async function startFakeSocks5({ username, password, hosts = {} }) {
+/**
+ * `allowListed` makes it behave like a gateway that also trusts this machine's
+ * address: offered both methods, it picks no authentication, so it never sees
+ * the user name that carries the gateway's routing options.
+ */
+export async function startFakeSocks5({
+  username,
+  password,
+  hosts = {},
+  allowListed = false,
+}) {
   const log = [];
   const server = net.createServer(async (client) => {
     const input = reader(client);
     try {
       const [, methodCount] = await input.read(2);
       const methods = [...(await input.read(methodCount))];
-      if (!methods.includes(2)) {
+      let user;
+      if (allowListed && methods.includes(0)) {
+        client.write(Buffer.from([5, 0]));
+      } else if (!methods.includes(2)) {
         log.push({ rejected: "no-credentials-offered" });
         client.end(Buffer.from([5, 0xff]));
         return;
+      } else {
+        client.write(Buffer.from([5, 2]));
+        const [, userLength] = await input.read(2);
+        user = (await input.read(userLength)).toString();
+        const [passLength] = await input.read(1);
+        const pass = (await input.read(passLength)).toString();
+        if (user !== username || pass !== password) {
+          log.push({ rejected: "bad-credentials", user });
+          client.end(Buffer.from([1, 1]));
+          return;
+        }
+        client.write(Buffer.from([1, 0]));
       }
-      client.write(Buffer.from([5, 2]));
-      const [, userLength] = await input.read(2);
-      const user = (await input.read(userLength)).toString();
-      const [passLength] = await input.read(1);
-      const pass = (await input.read(passLength)).toString();
-      if (user !== username || pass !== password) {
-        log.push({ rejected: "bad-credentials", user });
-        client.end(Buffer.from([1, 1]));
-        return;
-      }
-      client.write(Buffer.from([1, 0]));
       const [, , , type] = await input.read(4);
       let host;
       if (type === 1) host = [...(await input.read(4))].join(".");

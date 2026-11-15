@@ -178,16 +178,18 @@ async function socks5Handshake(
   host: string,
   port: number,
 ): Promise<void> {
+  // Offering only the one method the profile is configured for matters: a
+  // residential gateway that also allow-lists this machine picks no
+  // authentication when it may, and then never sees the user name that carries
+  // the country and sticky-session options, so shops would share one exit.
   const withAuth = Boolean(upstream.username || upstream.password);
-  socket.write(
-    Buffer.from(
-      withAuth
-        ? [SOCKS_VERSION, 2, AUTH_NONE, AUTH_PASSWORD]
-        : [SOCKS_VERSION, 1, AUTH_NONE],
-    ),
-  );
+  const offered = withAuth ? AUTH_PASSWORD : AUTH_NONE;
+  socket.write(Buffer.from([SOCKS_VERSION, 1, offered]));
   const [, method] = await reader.read(2);
-  if (method === AUTH_PASSWORD && withAuth) {
+  if (method !== offered) {
+    throw new Error("Proxy offered no acceptable authentication method");
+  }
+  if (withAuth) {
     const username = Buffer.from(upstream.username ?? "");
     const password = Buffer.from(upstream.password ?? "");
     socket.write(
@@ -200,8 +202,6 @@ async function socks5Handshake(
     );
     const [, status] = await reader.read(2);
     if (status !== 0) throw new Error("Proxy rejected the credentials");
-  } else if (method !== AUTH_NONE) {
-    throw new Error("Proxy offered no acceptable authentication method");
   }
   socket.write(
     Buffer.concat([
