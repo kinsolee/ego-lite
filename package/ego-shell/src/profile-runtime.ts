@@ -68,8 +68,7 @@ export class ProfileRuntime {
     const entry = this.#entries.get(profile.id);
     if (!entry) return undefined;
     const previous = entry.relay;
-    entry.profile = profile;
-    await this.#applyNetwork(entry);
+    await this.#applyNetwork(entry, profile);
     await previous?.close();
     return entry;
   }
@@ -109,23 +108,38 @@ export class ProfileRuntime {
     session.setPermissionCheckHandler((_contents, permission) =>
       GRANTED_PERMISSIONS.has(permission),
     );
-    const entry = { profile, session } as Entry;
-    await this.#applyNetwork(entry);
+    const entry = { session } as Entry;
+    await this.#applyNetwork(entry, profile);
     this.#entries.set(profile.id, entry);
     return entry;
   }
 
-  async #applyNetwork(entry: Entry): Promise<void> {
-    const { profile, session } = entry;
-    entry.relay =
+  /**
+   * Point the session at `profile`'s proxy and commit `profile` to the entry
+   * only once that succeeded. On failure the new relay, which holds the
+   * upstream credentials, is closed and the entry keeps its previous state.
+   */
+  async #applyNetwork(entry: Entry, profile: Profile): Promise<void> {
+    const { session } = entry;
+    const relay =
       profile.proxy.scheme === "none"
         ? undefined
         : await startRelay(profile.proxy);
-    await session.setProxy(
-      sessionProxyConfig(profile.proxy, entry.relay?.port),
-    );
-    // Sockets opened under the previous proxy would keep using the old exit IP.
-    await session.closeAllConnections();
+    try {
+      await session.setProxy(sessionProxyConfig(profile.proxy, relay?.port));
+      // Sockets opened under the previous proxy would keep using the old exit IP.
+      await session.closeAllConnections();
+    } catch (error) {
+      await relay?.close();
+      if (entry.profile) {
+        await session
+          .setProxy(sessionProxyConfig(entry.profile.proxy, entry.relay?.port))
+          .catch(() => {});
+      }
+      throw error;
+    }
+    entry.profile = profile;
+    entry.relay = relay;
 
     const override = userAgentOverride(
       profile.fingerprint,
