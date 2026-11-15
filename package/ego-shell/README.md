@@ -165,9 +165,11 @@ in for the kernel binary and its CDP endpoint.
   User-Agent, Client Hints and `navigator.platform` together, and Apostate
   has no switch for the string alone. Editing a running profile's proxy, seed, locale or timezone stops its
   process and closes its windows; it starts with the new settings the next
-  time it is started or a task space is opened on it. The active tab is the
-  one last opened or activated through the shell; a tab the user picks in the
-  tab strip is not reported. An agent's browser-level commands are answered
+  time it is started or a task space is opened on it. Chromium does not
+  announce a tab the user picks in the tab strip, so the shell asks each tab
+  of the window whether it is visible when an agent lists tabs or takes a
+  snapshot. While the window is minimised, no tab is, and the tab last known
+  to be active stays so. An agent's browser-level commands are answered
   by the shell, which knows only the `Target.*` ones: `Browser.*` commands
   such as `Browser.setDownloadBehavior` fail as not found.
 - The snapshot option `includeActionMarks` is ignored.

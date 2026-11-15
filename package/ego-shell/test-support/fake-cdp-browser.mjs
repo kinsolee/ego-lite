@@ -23,6 +23,9 @@ export async function startFakeBrowser() {
   let counter = 0;
   let lastWindow = 0;
   let activeWindow = 0;
+  /** windowId -> the targetId its tab strip shows */
+  const shown = new Map();
+  let minimised = false;
 
   const emit = (message) => socket?.send(JSON.stringify(message));
   const browserEvent = (method, params) => {
@@ -48,6 +51,7 @@ export async function startFakeBrowser() {
       ...(subtype ? { subtype } : {}),
     };
     targets.set(targetId, { info, windowId });
+    if (!subtype && (type ?? "page") === "page") shown.set(windowId, targetId);
     browserEvent("Target.targetCreated", { targetInfo: info });
     return targetId;
   }
@@ -93,6 +97,7 @@ export async function startFakeBrowser() {
         const target = targets.get(params.targetId);
         if (!target) throw new Error("No target with given id found");
         activeWindow = target.windowId;
+        shown.set(target.windowId, params.targetId);
         return {};
       }
       case "Target.closeTarget":
@@ -122,6 +127,16 @@ export async function startFakeBrowser() {
       info.url = params.url;
       info.title = params.url;
       browserEvent("Target.targetInfoChanged", { targetInfo: info });
+    }
+    if (
+      method === "Runtime.evaluate" &&
+      params.expression === "document.visibilityState"
+    ) {
+      const { windowId } = targets.get(targetId);
+      const visible = !minimised && shown.get(windowId) === targetId;
+      return {
+        result: { type: "string", value: visible ? "visible" : "hidden" },
+      };
     }
     return replies.get(method) ?? {};
   }
@@ -174,6 +189,14 @@ export async function startFakeBrowser() {
       return addTarget({ ...options, windowId });
     },
     closePage: removeTarget,
+    /** The user picks a tab in the tab strip; Chromium announces nothing. */
+    selectTab(targetId) {
+      shown.set(targets.get(targetId).windowId, targetId);
+    },
+    /** Every window is minimised, so no tab is visible. */
+    minimise(value = true) {
+      minimised = value;
+    },
     /** A prerendered page takes the place of the page on screen. */
     /** A page sets its title after loading; Chromium announces nothing. */
     retitle(targetId, title) {

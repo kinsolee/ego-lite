@@ -22,6 +22,8 @@ const FRAME_AUTO_ATTACH = {
 };
 
 const CLOSE_WAIT_MS = 3_000;
+/** A page held up by a dialog answers nothing; its visibility is then unknown. */
+const VISIBILITY_WAIT_MS = 1_000;
 
 /** What Chromium reports for a target; only the fields the shell reads. */
 type ChromiumTarget = TargetInfo & { subtype?: string };
@@ -107,6 +109,28 @@ class ApostateTab implements TaskTab {
     await this.send("Target.setAutoAttach", FRAME_AUTO_ATTACH).catch(() => {});
   }
 
+  /** Whether the tab is the one its window shows; undefined when it cannot say. */
+  async visible(): Promise<boolean | undefined> {
+    let timer: NodeJS.Timeout | undefined;
+    const reply = await Promise.race([
+      this.#connection
+        .send(
+          "Runtime.evaluate",
+          { expression: "document.visibilityState", returnByValue: true },
+          this.#session,
+        )
+        .catch(() => undefined),
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), VISIBILITY_WAIT_MS);
+      }),
+    ]);
+    clearTimeout(timer);
+    const state = reply?.result?.value;
+    return state === "visible" || state === "hidden"
+      ? state === "visible"
+      : undefined;
+  }
+
   update(info: ChromiumTarget): void {
     this.#info = info;
   }
@@ -186,11 +210,27 @@ export class ApostateSpace extends TaskSpace {
   }
 
   /**
-   * The tab most recently opened or activated through the shell. Chromium does
-   * not report which tab the user picked in the tab strip.
+   * The tab most recently opened or activated through the shell, or found
+   * shown by `syncActiveTab`.
    */
   activeTab(): ApostateTab | undefined {
     return this.#active;
+  }
+
+  /**
+   * Chromium announces nothing when the user picks a tab in the tab strip, but
+   * only the tab a window shows is visible. When the window is minimised no
+   * tab is, and the last known one stays active.
+   */
+  override async syncActiveTab(): Promise<void> {
+    if (this.#tabs.length < 2) return;
+    const tabs = [...this.#tabs];
+    const states = await Promise.all(tabs.map((tab) => tab.visible()));
+    const shown = tabs.filter((_, index) => states[index] === true);
+    if (shown.length !== 1 || shown[0] === this.#active) return;
+    if (!this.#tabs.includes(shown[0]!)) return;
+    this.#active = shown[0];
+    this.publish();
   }
 
   createTab(url: string): Promise<ApostateTab> {

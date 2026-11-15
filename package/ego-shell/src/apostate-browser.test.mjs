@@ -302,6 +302,35 @@ test("a title set after the page loaded is reported when tabs are read", async (
   assert.equal(tab.targetInfo().title, "Pedido enviado");
 });
 
+test("a tab the user picks in the tab strip becomes the active tab", async (t) => {
+  const { chromium, browser } = await setup(t);
+  const space = await browser.createSpace("orders", "user");
+  const [first] = space.tabs();
+  const second = await space.createTab("https://shop.example/");
+  assert.equal(space.activeTab(), second);
+
+  chromium.selectTab(first.targetId);
+  await space.syncActiveTab();
+  assert.equal(space.activeTab(), first);
+
+  chromium.minimise();
+  chromium.selectTab(second.targetId);
+  await space.syncActiveTab();
+  assert.equal(space.activeTab(), first, "a minimised window keeps its tab");
+});
+
+test("a page that cannot answer does not hold up the active tab", async (t) => {
+  const { chromium, browser } = await setup(t);
+  const space = await browser.createSpace("orders", "user");
+  const [first] = space.tabs();
+  const second = await space.createTab("https://shop.example/");
+  chromium.selectTab(first.targetId);
+  chromium.failures.set("Runtime.evaluate", "Execution context was destroyed.");
+
+  await space.syncActiveTab();
+  assert.equal(space.activeTab(), second);
+});
+
 test("a popup joins the space of the page that opened it", async (t) => {
   const { chromium, browser } = await setup(t);
   const space = await browser.createSpace("orders", "agent");
