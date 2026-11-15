@@ -126,6 +126,26 @@ export class Space extends TaskSpace {
     this.publish();
   }
 
+  /**
+   * Electron has no browser endpoint. A page's debugger session answers
+   * `Browser.getVersion`, but its `Browser.cancelDownload` looks only in the
+   * app's default session and refuses any other context id, so a download in
+   * a profile's partition cannot be cancelled through it.
+   */
+  async browserCommand(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
+    if (method === "Browser.cancelDownload") {
+      throw new Error(
+        "Browser.cancelDownload is not supported by the built-in kernel: Electron cannot reach a download in a profile's session",
+      );
+    }
+    const tab = this.#active ?? this.#tabs[0];
+    if (!tab) throw new Error("The task space has no open tab");
+    return tab.send(method, params);
+  }
+
   async highlightMouse(x: number, y: number): Promise<void> {
     await this.#active?.highlight(x, y);
   }

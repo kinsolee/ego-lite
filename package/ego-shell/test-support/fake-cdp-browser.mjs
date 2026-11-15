@@ -110,6 +110,13 @@ export async function startFakeBrowser() {
         if (!target) throw new Error("No target with given id found");
         return { windowId: target.windowId };
       }
+      case "Browser.getVersion":
+        return { product: "Chrome/155.0.8059.31", protocolVersion: "1.3" };
+      case "Browser.cancelDownload":
+        if (params.guid !== "G-RUNNING") {
+          throw new Error("No download item found for the given GUID");
+        }
+        return {};
       case "Browser.close":
         setImmediate(() => socket?.close());
         return {};

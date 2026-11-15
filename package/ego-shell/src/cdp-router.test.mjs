@@ -39,6 +39,11 @@ function fakeSpace(...tabs) {
     },
     closeTab: async (targetId) => void space.closed.push(targetId),
     activateTab: async (targetId) => void space.activated.push(targetId),
+    browserCommands: [],
+    browserCommand: async (method, params) => {
+      space.browserCommands.push({ method, params });
+      return method === "Browser.getVersion" ? { product: "Chrome/155" } : {};
+    },
   };
   return space;
 }
@@ -306,8 +311,24 @@ test("commands and events of an iframe travel on the iframe's own session", asyn
 });
 
 test("a browser-level command the shell does not emulate is rejected by name", async () => {
-  const { call } = connect(fakeSpace(fakeTab("T1")));
+  const space = fakeSpace(fakeTab("T1"));
+  const { call } = connect(space);
 
-  const reply = await call("Browser.getVersion");
-  assert.equal(reply.error.message, "'Browser.getVersion' wasn't found");
+  const reply = await call("Browser.close");
+  assert.equal(reply.error.message, "'Browser.close' wasn't found");
+  assert.deepEqual(space.browserCommands, []);
+});
+
+test("the Browser commands the harness sends reach the space's browser", async () => {
+  const space = fakeSpace(fakeTab("T1"));
+  const { call } = connect(space);
+
+  const version = await call("Browser.getVersion");
+  assert.deepEqual(version.result, { product: "Chrome/155" });
+  const cancel = await call("Browser.cancelDownload", { guid: "G1" });
+  assert.deepEqual(cancel.result, {});
+  assert.deepEqual(space.browserCommands, [
+    { method: "Browser.getVersion", params: {} },
+    { method: "Browser.cancelDownload", params: { guid: "G1" } },
+  ]);
 });

@@ -161,15 +161,21 @@ in for the kernel binary and its CDP endpoint.
 - Built-in kernel: downloads and permission prompts have no UI, and
   permissions other than fullscreen, pointer lock and clipboard write are
   denied. Canvas, WebGL, audio, fonts and ClientRects are the host's own.
+- Built-in kernel: `download.cancel()` does not work. A page's debugger
+  answers `Browser.cancelDownload` only for Electron's default session, so
+  the shell fails it with a message saying the kernel does not support it.
 - Apostate: a profile cannot set a user agent. The persona sets the
   User-Agent, Client Hints and `navigator.platform` together, and Apostate
-  has no switch for the string alone. Editing a running profile's proxy, seed, locale or timezone stops its
-  process and closes its windows; it starts with the new settings the next
-  time it is started or a task space is opened on it. Chromium does not
-  announce a tab the user picks in the tab strip, so the shell asks each tab
-  of the window whether it is visible when an agent lists tabs or takes a
-  snapshot. While the window is minimised, no tab is, and the tab last known
-  to be active stays so. An agent's browser-level commands are answered
-  by the shell, which knows only the `Target.*` ones: `Browser.*` commands
-  such as `Browser.setDownloadBehavior` fail as not found.
+  has no switch for the string alone.
+- Apostate: editing a running profile's proxy, seed, locale or timezone
+  stops its process and closes its windows; it starts with the new settings
+  the next time it is started or a task space is opened on it.
+- Apostate: Chromium does not announce a tab the user picks in the tab
+  strip, so the shell asks each tab of the window whether it is visible when
+  an agent lists tabs or takes a snapshot. While the window is minimised, no
+  tab is, and the tab last known to be active stays so.
+- An agent's browser-level commands are answered by the shell. Of the
+  `Browser.*` commands it passes on only the two the harness sends,
+  `Browser.getVersion` and `Browser.cancelDownload`. Any other, such as
+  `Browser.close`, fails as not found.
 - The snapshot option `includeActionMarks` is ignored.

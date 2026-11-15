@@ -32,6 +32,10 @@ export abstract class TaskSpace implements RoutedSpace {
   abstract createTab(url: string): Promise<TaskTab>;
   abstract closeTab(targetId: string): Promise<void>;
   abstract activateTab(targetId: string): Promise<void>;
+  abstract browserCommand(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<unknown>;
   /** Show the user where the agent is about to act, in viewport CSS pixels. */
   abstract highlightMouse(x: number, y: number): Promise<void>;
   abstract close(): Promise<void>;

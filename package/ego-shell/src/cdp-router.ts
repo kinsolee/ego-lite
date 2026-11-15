@@ -37,6 +37,11 @@ export interface RoutedSpace {
   activateTab(targetId: string): Promise<void>;
   /** Bring titles and URLs up to date when the kernel does not announce them. */
   refreshTabs?(): Promise<void>;
+  /** Run a `Browser.*` command against the browser that holds the space. */
+  browserCommand(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<unknown>;
 }
 
 type CdpRequest = {
@@ -257,6 +262,10 @@ export class CdpClient {
         };
       case "Target.setAutoAttach":
         return { result: {} };
+      // The two the harness sends; any other, such as Browser.close, is refused.
+      case "Browser.cancelDownload":
+      case "Browser.getVersion":
+        return { result: await this.#space.browserCommand(method, params) };
       case "Target.createTarget": {
         const created = await this.#space.createTab(
           String(params.url ?? "about:blank"),

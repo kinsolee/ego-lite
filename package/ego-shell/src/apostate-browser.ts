@@ -253,6 +253,14 @@ export class ApostateSpace extends TaskSpace {
     return this.#browser.refreshTabs();
   }
 
+  /** Every window of the process is one browser, so the command goes to it. */
+  browserCommand(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.#browser.send(method, params);
+  }
+
   async highlightMouse(x: number, y: number): Promise<void> {
     await this.#active?.highlight(x, y);
   }
@@ -440,6 +448,11 @@ export class ApostateBrowser {
 
   changed(): void {
     this.#host.changed();
+  }
+
+  /** A command for the browser itself rather than one of its pages. */
+  send(method: string, params: Record<string, unknown>): Promise<unknown> {
+    return this.#connection.send(method, params);
   }
 
   /** Ask the browser to quit, and give it a moment to do so on its own. */

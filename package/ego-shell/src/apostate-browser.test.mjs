@@ -331,6 +331,34 @@ test("a page that cannot answer does not hold up the active tab", async (t) => {
   assert.equal(space.activeTab(), second);
 });
 
+test("the Browser commands the harness sends reach Apostate's browser session", async (t) => {
+  const { chromium, browser } = await setup(t);
+  const space = await browser.createSpace("orders", "agent");
+  const agent = connect(space);
+
+  const version = await agent.call("Browser.getVersion");
+  assert.equal(version.result.product, "Chrome/155.0.8059.31");
+  const cancelled = await agent.call("Browser.cancelDownload", {
+    guid: "G-RUNNING",
+    browserContextId: "CTX",
+  });
+  assert.deepEqual(cancelled.result, {});
+  const unknown = await agent.call("Browser.cancelDownload", { guid: "G-0" });
+  assert.equal(
+    unknown.error.message,
+    "No download item found for the given GUID",
+  );
+  assert.deepEqual(
+    chromium.calls
+      .filter((call) => call.method.startsWith("Browser.cancel"))
+      .map((call) => [call.sessionId, call.params]),
+    [
+      [undefined, { guid: "G-RUNNING", browserContextId: "CTX" }],
+      [undefined, { guid: "G-0" }],
+    ],
+  );
+});
+
 test("a popup joins the space of the page that opened it", async (t) => {
   const { chromium, browser } = await setup(t);
   const space = await browser.createSpace("orders", "agent");
