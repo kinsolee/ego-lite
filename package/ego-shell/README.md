@@ -136,8 +136,13 @@ screenshot.
   session proxy configuration and a local relay.
 - `src/task-space.ts` holds what both kernels share: ownership, agent
   connections and the list of spaces.
+- `src/profile-queue.ts` runs each profile's start, update, release and erase
+  one at a time, in call order. Both kernels use it.
 - `src/profile-runtime.ts`, `src/spaces.ts` and `src/tab.ts` are the built-in
   kernel: one Electron session per profile, windows and tabs.
+  `src/profile-network.ts` switches a session's proxy, user agent and
+  languages as one step and puts the old ones back when a step fails; it has
+  no Electron import, so its tests run under plain Node.
 - `src/kernel.ts` finds and checks the Apostate binary.
   `src/apostate-launcher.ts` starts and stops one process.
   `src/browser-cdp.ts` and `src/apostate-browser.ts` drive its windows and tabs
