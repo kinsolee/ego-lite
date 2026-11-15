@@ -292,3 +292,59 @@ test("shutting the backend down stops every kernel", async (t) => {
 
   assert.deepEqual(pids.map(alive), [false, false]);
 });
+
+async function slowToQuit(t) {
+  process.env.FAKE_APOSTATE_EXIT_DELAY_MS = "400";
+  t.after(() => delete process.env.FAKE_APOSTATE_EXIT_DELAY_MS);
+  const context = await setup(t);
+  await context.backend.open("orders", "agent", profile());
+  const { pid } = await context.launched("br");
+  return { ...context, pid };
+}
+
+test("a profile that is still quitting counts as running", async (t) => {
+  const { backend, pid } = await slowToQuit(t);
+
+  const stopping = backend.release("br");
+  await delay(50);
+
+  assert.equal(alive(pid), true);
+  assert.equal(backend.running("br"), true);
+  await stopping;
+  assert.equal(backend.running("br"), false);
+});
+
+test("shutting the backend down waits for a kernel that is already quitting", async (t) => {
+  const { backend, pid } = await slowToQuit(t);
+
+  void backend.release("br");
+  await delay(50);
+  await backend.stop();
+
+  assert.equal(alive(pid), false);
+});
+
+test("starting a profile that is still quitting waits for the old process to end", async (t) => {
+  const { backend, pid, launched } = await slowToQuit(t);
+
+  void backend.release("br");
+  await delay(50);
+  const reopened = backend.open("orders", "agent", profile());
+  await delay(50);
+
+  assert.equal((await launched("br")).pid, pid, "launched over a live kernel");
+  await reopened;
+  assert.equal(alive(pid), false);
+  assert.notEqual((await launched("br")).pid, pid);
+});
+
+test("erasing a profile that is still quitting deletes its data after the process ends", async (t) => {
+  const { backend, pid, userDataDir } = await slowToQuit(t);
+
+  void backend.release("br");
+  await delay(50);
+  await backend.erase("br");
+
+  assert.equal(alive(pid), false);
+  await assert.rejects(access(userDataDir("br")), { code: "ENOENT" });
+});

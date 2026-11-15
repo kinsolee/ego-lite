@@ -19,7 +19,6 @@ type RunningProfile = {
   relay: Relay | undefined;
   /** What the process was started with; a change means a restart. */
   identity: string;
-  stopped?: Promise<void>;
 };
 
 /**
@@ -38,6 +37,8 @@ export class ApostateBackend implements KernelBackend {
   readonly #locate: () => Promise<KernelBinary>;
   readonly #running = new Map<string, RunningProfile>();
   readonly #starting = new Map<string, Promise<RunningProfile>>();
+  /** Processes asked to quit that have not exited yet; they still own the data directory. */
+  readonly #stopping = new Map<string, Promise<void>>();
   #binary: Promise<KernelBinary> | undefined;
 
   constructor(options: {
@@ -62,7 +63,7 @@ export class ApostateBackend implements KernelBackend {
   }
 
   running(profileId: string): boolean {
-    return this.#running.has(profileId);
+    return this.#running.has(profileId) || this.#stopping.has(profileId);
   }
 
   async update(profile: Profile): Promise<void> {
@@ -81,7 +82,8 @@ export class ApostateBackend implements KernelBackend {
     const starting = this.#starting.get(profileId);
     if (starting) await starting.catch(() => {});
     const running = this.#running.get(profileId);
-    if (running) await this.#shutDown(profileId, running);
+    if (running) this.#shutDown(profileId, running);
+    await this.#stopping.get(profileId);
   }
 
   async erase(profileId: string): Promise<void> {
@@ -90,7 +92,11 @@ export class ApostateBackend implements KernelBackend {
   }
 
   async stop(): Promise<void> {
-    const ids = new Set([...this.#starting.keys(), ...this.#running.keys()]);
+    const ids = new Set([
+      ...this.#starting.keys(),
+      ...this.#running.keys(),
+      ...this.#stopping.keys(),
+    ]);
     await Promise.allSettled([...ids].map((id) => this.release(id)));
   }
 
@@ -103,9 +109,12 @@ export class ApostateBackend implements KernelBackend {
     if (running) return Promise.resolve(running);
     let starting = this.#starting.get(profile.id);
     if (!starting) {
-      starting = this.#launch(profile).finally(() =>
-        this.#starting.delete(profile.id),
-      );
+      const stopping = this.#stopping.get(profile.id);
+      starting = (
+        stopping
+          ? stopping.then(() => this.#launch(profile))
+          : this.#launch(profile)
+      ).finally(() => this.#starting.delete(profile.id));
       this.#starting.set(profile.id, starting);
     }
     return starting;
@@ -157,16 +166,20 @@ export class ApostateBackend implements KernelBackend {
     }
   }
 
-  #shutDown(profileId: string, running: RunningProfile): Promise<void> {
-    running.stopped ??= (async () => {
-      if (this.#running.get(profileId) === running) {
-        this.#running.delete(profileId);
-      }
+  #shutDown(profileId: string, running: RunningProfile): void {
+    if (this.#running.get(profileId) !== running) return;
+    this.#running.delete(profileId);
+    const stopped = (async () => {
       await running.browser.close();
       await running.kernel.stop();
       await running.relay?.close();
+    })().finally(() => {
+      this.#stopping.delete(profileId);
       this.#host.changed();
-    })();
-    return running.stopped;
+    });
+    // A kernel that exits on its own has no caller waiting; release() reports failures.
+    void stopped.catch(() => {});
+    this.#stopping.set(profileId, stopped);
+    this.#host.changed();
   }
 }

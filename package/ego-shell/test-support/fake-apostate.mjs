@@ -40,9 +40,17 @@ if (mode === "cdp") {
   );
 }
 
+// FAKE_APOSTATE_EXIT_DELAY_MS makes it take that long to quit, as Chromium does
+// while it flushes the profile to disk.
+const exitDelayMs = Number(process.env.FAKE_APOSTATE_EXIT_DELAY_MS ?? 0);
+let quitting = false;
 process.on("SIGTERM", () => {
-  if (mode === "stubborn") return;
-  rmSync(lock, { force: true });
-  process.exit(0);
+  if (mode === "stubborn" || quitting) return;
+  quitting = true;
+  setTimeout(() => {
+    writeFileSync(path.join(userDataDir, "Last Session"), "flushed");
+    rmSync(lock, { force: true });
+    process.exit(0);
+  }, exitDelayMs);
 });
 setInterval(() => {}, 1_000);
