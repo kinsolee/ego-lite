@@ -42,7 +42,9 @@ async function startFakeShell(t, answer = () => null) {
           const { id, method, args, spaceId } = message;
           try {
             const value = answer(method, args, spaceId);
-            if (value !== HANG) reply({ t: "result", id, ok: true, value });
+            if (value === FLOOD) socket.write("x".repeat(64 * 1024 * 1024 + 1));
+            else if (value !== HANG)
+              reply({ t: "result", id, ok: true, value });
           } catch (error) {
             reply({ t: "result", id, ok: false, error });
           }
@@ -93,6 +95,7 @@ async function startFakeShell(t, answer = () => null) {
 }
 
 const HANG = Symbol("never answer");
+const FLOOD = Symbol("stream an endless line");
 
 function runCli(script, env, args = []) {
   return new Promise((resolve, reject) => {
@@ -493,3 +496,17 @@ async function until(condition, what) {
   }
   assert.fail(`timed out waiting for ${what}`);
 }
+
+test(
+  "a shell that sends a line past 64 MiB is dropped instead of buffered",
+  { timeout: 20_000 },
+  async (t) => {
+    const shell = await startFakeShell(t, () => FLOOD);
+    const { ego } = await connect(t, shell);
+
+    assert.deepEqual(await ego.listTabs(), {
+      error: "ego-shell disconnected",
+      error_code: "EGO_BROWSER_UNAVAILABLE",
+    });
+  },
+);

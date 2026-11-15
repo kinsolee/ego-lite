@@ -51,6 +51,7 @@ async function dial(port) {
   const ended = new Promise((resolve) => socket.once("close", resolve));
   return {
     send: (message) => socket.write(`${JSON.stringify(message)}\n`),
+    write: (text) => socket.write(text),
     next: () =>
       messages.length
         ? Promise.resolve(messages.shift())
@@ -267,3 +268,57 @@ test("closing the server drops its agents and removes the endpoint file", async 
   await client.ended;
   await assert.rejects(stat(endpointFile), { code: "ENOENT" });
 });
+
+test(
+  "a client that has not said hello is dropped once it sends 4 KiB without a newline",
+  { timeout: 5_000 },
+  async (t) => {
+    const { server } = await startServer(t);
+    const client = await dial(server.port);
+    t.after(client.close);
+
+    client.write("x".repeat(4 * 1024 + 1));
+
+    await client.ended;
+  },
+);
+
+test(
+  "a client that never says hello is dropped after two seconds",
+  { timeout: 5_000 },
+  async (t) => {
+    const { server } = await startServer(t);
+    const client = await dial(server.port);
+    t.after(client.close);
+    const started = Date.now();
+
+    await client.ended;
+
+    assert.ok(
+      Date.now() - started >= 1_500,
+      "dropped before the hello timeout",
+    );
+  },
+);
+
+test(
+  "after hello, a large message is accepted and one past 64 MiB without a newline is not",
+  { timeout: 20_000 },
+  async (t) => {
+    const seen = [];
+    const { server } = await startServer(t, {
+      cdp: (_connection, _spaceId, message) => seen.push(message.length),
+    });
+    const client = await connected(server);
+    t.after(client.close);
+
+    const screenshot = "a".repeat(8 * 1024 * 1024);
+    client.send({ t: "cdp", spaceId: 1, message: screenshot });
+    while (seen.length === 0)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(seen, [screenshot.length]);
+
+    client.write("x".repeat(64 * 1024 * 1024 + 1));
+    await client.ended;
+  },
+);

@@ -41,22 +41,34 @@ export type AgentServer = {
   close(): Promise<void>;
 };
 
-/** Split a byte stream into newline-delimited JSON messages. */
+/** Until hello: room for the hello line and little else. */
+const UNAUTHENTICATED_LINE_LIMIT = 4 * 1024;
+/** After hello: a full-page screenshot as base64 fits in one CDP message. */
+const AUTHENTICATED_LINE_LIMIT = 64 * 1024 * 1024;
+const HELLO_TIMEOUT_MS = 2_000;
+
+/**
+ * Split a byte stream into newline-delimited JSON messages. A line longer than
+ * `limit()` characters destroys the socket instead of buffering without end.
+ */
 export function readLines(
   socket: net.Socket,
   onLine: (line: string) => void,
+  limit: () => number,
 ): void {
   const decoder = new StringDecoder("utf8");
   let pending = "";
   socket.on("data", (chunk) => {
     pending += decoder.write(chunk);
     let end = pending.indexOf("\n");
-    while (end >= 0) {
+    while (end >= 0 && !socket.destroyed) {
       const line = pending.slice(0, end);
       pending = pending.slice(end + 1);
+      if (line.length > limit()) break;
       if (line) onLine(line);
       end = pending.indexOf("\n");
     }
+    if (end >= 0 || pending.length > limit()) socket.destroy();
   });
 }
 
@@ -88,6 +100,7 @@ export async function startAgentServer(options: {
       if (!socket.destroyed) socket.write(`${JSON.stringify(message)}\n`);
     };
     let connection: AgentConnection | undefined;
+    const silence = setTimeout(() => socket.destroy(), HELLO_TIMEOUT_MS);
 
     const onMessage = async (message: any) => {
       if (!connection) {
@@ -95,6 +108,7 @@ export async function startAgentServer(options: {
           socket.destroy();
           return;
         }
+        clearTimeout(silence);
         connection = {
           id: nextConnectionId++,
           sendCdp: (payload) => send({ t: "cdp", message: payload }),
@@ -131,18 +145,24 @@ export async function startAgentServer(options: {
       }
     };
 
-    readLines(socket, (line) => {
-      let message: unknown;
-      try {
-        message = JSON.parse(line);
-      } catch {
-        socket.destroy();
-        return;
-      }
-      void onMessage(message);
-    });
+    readLines(
+      socket,
+      (line) => {
+        let message: unknown;
+        try {
+          message = JSON.parse(line);
+        } catch {
+          socket.destroy();
+          return;
+        }
+        void onMessage(message);
+      },
+      () =>
+        connection ? AUTHENTICATED_LINE_LIMIT : UNAUTHENTICATED_LINE_LIMIT,
+    );
     socket.on("error", () => socket.destroy());
     socket.on("close", () => {
+      clearTimeout(silence);
       sockets.delete(socket);
       if (connection) handlers.closed(connection);
     });

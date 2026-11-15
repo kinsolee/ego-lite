@@ -10,6 +10,8 @@ import { StringDecoder } from "node:string_decoder";
 // nothing past the CLI entrypoint knows which browser it is driving.
 
 const CONNECT_TIMEOUT_MS = 2000;
+/** A full-page screenshot as base64 fits in one message; ego-shell uses the same cap. */
+const MAX_LINE_LENGTH = 64 * 1024 * 1024;
 const ENDPOINT_FILE = "agent-endpoint.json";
 
 const ASYNC_METHODS = [
@@ -228,9 +230,11 @@ export async function connectShellEgo(
     while (newline !== -1) {
       const line = buffered.slice(0, newline);
       buffered = buffered.slice(newline + 1);
+      if (line.length > MAX_LINE_LENGTH) break;
       if (line) onMessage(JSON.parse(line));
       newline = buffered.indexOf("\n");
     }
+    if (newline !== -1 || buffered.length > MAX_LINE_LENGTH) socket.destroy();
   });
   socket.on("error", () => {});
   socket.on("close", () => {
