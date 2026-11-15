@@ -62,7 +62,7 @@ export class AgentApi implements AgentHandlers {
             id: space.id,
             name: space.name,
             createdBy: space.createdBy,
-            ownership: space.ownership,
+            ownership: space.reportedOwnership,
             profileId: space.profile.id,
             profileName: space.profile.name,
             recentTabTitles: space
@@ -129,7 +129,7 @@ export class AgentApi implements AgentHandlers {
         await space.close();
         return `${space.id} task space closed.`;
       case "completeTaskSpace":
-        space.setOwnership("user");
+        space.complete();
         return `${space.id} task space completed.`;
       case "handOffTaskSpace":
         space.setOwnership("user");

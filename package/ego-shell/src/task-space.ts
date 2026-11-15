@@ -3,6 +3,13 @@ import type { Kernel, Profile } from "./profile-store.js";
 
 export type Owner = "agent" | "user";
 
+/**
+ * Ownership as agents read it. An agent's space the user holds after a handoff
+ * or by taking control is still the agent's: the harness then records the tab
+ * the user left active, and does not treat the space as someone else's.
+ */
+export type ReportedOwnership = Owner | "agentDelegatedToUser";
+
 export interface TaskTab extends RoutedTab {
   /** Out-of-process frames of this tab: frame id to CDP session id. */
   childFrames(): Map<string, string>;
@@ -17,6 +24,8 @@ export abstract class TaskSpace implements RoutedSpace {
   ownership: Owner;
   agentState = "";
   readonly #clients = new Set<CdpClient>();
+  /** The user holds the space only until the agent takes it back. */
+  #delegated = false;
 
   constructor(
     readonly id: number,
@@ -60,13 +69,25 @@ export abstract class TaskSpace implements RoutedSpace {
     if (this.#clients.size === 0) this.releaseAgentState();
   }
 
+  get reportedOwnership(): ReportedOwnership {
+    return this.#delegated ? "agentDelegatedToUser" : this.ownership;
+  }
+
   setOwnership(owner: Owner): void {
+    this.#delegated =
+      owner === "user" && (this.ownership === "agent" || this.#delegated);
     this.ownership = owner;
     if (owner === "user") {
       this.agentState = "";
       this.releaseAgentState();
     }
     this.publish();
+  }
+
+  /** The agent is done with the space and leaves it to the user for good. */
+  complete(): void {
+    this.setOwnership("user");
+    this.#delegated = false;
   }
 
   setAgentState(state: string): void {
