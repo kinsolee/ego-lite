@@ -38,8 +38,8 @@ const POLL_MS = 50;
 
 /**
  * The persona is fixed to macOS: a Windows persona on a Mac is flagged as
- * tampering. --fingerprint-noise is left off because sites that look for
- * anti-detect browsers recognise it.
+ * tampering. Without --fingerprint-noise every profile reports the same canvas
+ * hash, which lets a site tie one profile's account to another's.
  */
 export function apostateArguments(launch: KernelLaunch): string[] {
   const args = [
@@ -52,6 +52,7 @@ export function apostateArguments(launch: KernelLaunch): string[] {
     "--fingerprint-platform=macos",
     `--fingerprint-locale=${launch.locale}`,
     `--fingerprint-timezone=${launch.timezone}`,
+    "--fingerprint-noise",
     "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
   ];
   if (launch.proxyPort !== undefined) {
