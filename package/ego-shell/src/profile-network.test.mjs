@@ -240,3 +240,25 @@ test("a profile that cannot be restored is reported unusable even when its relay
   assert.equal(error.name, "ProfileUnusableError");
   assert.equal(networks.live().length, 0);
 });
+
+test("a relay that fails to start leaves the running profile as it was", async () => {
+  const { networks, session, relayStart, openRelays, proxyPort } = setup();
+  const live = await networks.start(profile(1080));
+  const inUse = Object.assign(new Error("listen EADDRINUSE"), {
+    code: "EADDRINUSE",
+  });
+  relayStart.error = inUse;
+  let setProxyCalls = 0;
+  session.fail.setProxy = () => (++setProxyCalls, true);
+
+  await assert.rejects(networks.update(profile(1081)), inUse);
+
+  assert.equal(setProxyCalls, 0, "the session was not touched");
+  assert.equal(networks.live()[0], live);
+  assert.equal(live.profile.proxy.port, 1080);
+  assert.deepEqual(
+    openRelays().map((relay) => relay.upstream),
+    [1080],
+  );
+  assert.equal(proxyPort(), openRelays()[0].port);
+});

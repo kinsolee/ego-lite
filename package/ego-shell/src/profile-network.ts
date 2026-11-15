@@ -70,9 +70,10 @@ export class ProfileNetworks<S extends NetworkSession> {
     return this.#queue.run(profile.id, async () => {
       const entry = this.#entries.get(profile.id);
       if (!entry) return undefined;
-      let next: Omit<Entry<S>, "session">;
+      // A failure here has not touched the session, so there is nothing to undo.
+      const next = await this.#prepare(profile);
       try {
-        next = await this.#switch(entry.session, profile);
+        await this.#switch(entry.session, next);
       } catch (error) {
         await this.#rollBack(entry, error);
         throw error;
@@ -143,32 +144,37 @@ export class ProfileNetworks<S extends NetworkSession> {
 
   async #start(profile: Profile): Promise<Entry<S>> {
     const session = this.#deps.session(profile.id);
-    const entry = { session, ...(await this.#switch(session, profile)) };
+    const next = await this.#prepare(profile);
+    await this.#switch(session, next);
+    const entry = { session, ...next };
     this.#entries.set(profile.id, entry);
     return entry;
   }
 
-  /**
-   * Put `profile`'s proxy, user agent and languages in force on `session`.
-   * On failure the new relay, which holds the upstream credentials, is closed
-   * and nothing is returned to commit.
-   */
-  async #switch(
-    session: S,
-    profile: Profile,
-  ): Promise<Omit<Entry<S>, "session">> {
+  /** Work out `profile`'s overrides and start its relay, without touching any session. */
+  async #prepare(profile: Profile): Promise<Omit<Entry<S>, "session">> {
     const overrides = this.#deps.overrides(profile);
     const relay =
       profile.proxy.scheme === "none"
         ? undefined
         : await this.#deps.startRelay(profile.proxy);
+    return { profile, relay, overrides };
+  }
+
+  /**
+   * Put prepared settings in force on `session`. On failure the new relay,
+   * which holds the upstream credentials, is closed.
+   */
+  async #switch(
+    session: S,
+    { profile, relay, overrides }: Omit<Entry<S>, "session">,
+  ): Promise<void> {
     try {
       await this.#apply(session, profile.proxy, relay?.port, overrides);
     } catch (error) {
       if (relay) await this.#close(relay);
       throw error;
     }
-    return { profile, relay, overrides };
   }
 
   /**
