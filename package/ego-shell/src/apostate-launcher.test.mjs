@@ -66,7 +66,7 @@ test("a profile's seed, locale and timezone reach the kernel", async (t) => {
       "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
     ),
   );
-  assert.ok(launch.argv.includes("--fingerprint-noise"));
+  assert.ok(!launch.argv.some((arg) => arg.startsWith("--fingerprint-noise")));
   assert.ok(!launch.argv.some((arg) => arg.startsWith("--proxy-server")));
 });
 
