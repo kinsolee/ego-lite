@@ -113,11 +113,13 @@ Each profile has its own `--user-data-dir` under
 `<userData>/apostate-profiles/<profile id>`. Its seed, locale and timezone
 come from the profile: `--fingerprint=<seed>`, `--fingerprint-platform=macos`,
 `--fingerprint-locale`, `--fingerprint-timezone`, and `TZ` in the process
-environment. `--fingerprint-noise` is on: without it every profile reports
-the same canvas hash, which lets a site tie one profile's accounts to
-another's. The port is `--remote-debugging-port=0`, read back from
-`DevToolsActivePort`. A kernel left over from a crashed shell is
-stopped before the profile starts again.
+environment. `--fingerprint-noise` is left off: with it, pixels a page writes
+to a canvas read back changed, which a page can test for to spot an anti-detect
+browser. Every profile on one Mac therefore reports the same canvas hash, and
+only a profile with its own proxy exit stands apart from the others; direct
+profiles share the machine's address as well. The port is
+`--remote-debugging-port=0`, read back from `DevToolsActivePort`. A kernel
+left over from a crashed shell is stopped before the profile starts again.
 
 The shell enables no CDP domain on the session an agent drives.
 
@@ -166,6 +168,14 @@ The tests run against `dist/`. `test-support/fake-proxies.mjs` provides SOCKS5
 and HTTP proxies that require credentials and log every connection.
 `test-support/fake-apostate.mjs` and `test-support/fake-cdp-browser.mjs` stand
 in for the kernel binary and its CDP endpoint.
+
+`src/apostate-canvas.test.mjs` needs a real kernel and is skipped without one.
+It starts the kernel with the shell's arguments and checks that canvas pixels a
+page writes read back unchanged:
+
+```sh
+EGO_SHELL_APOSTATE_EXECUTABLE=<path to Chromium.app>/Contents/MacOS/Chromium npm test
+```
 
 ## Known limits
 
