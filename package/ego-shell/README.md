@@ -115,8 +115,9 @@ come from the profile: `--fingerprint=<seed>`, `--fingerprint-platform=macos`,
 `--fingerprint-locale`, `--fingerprint-timezone`, and `TZ` in the process
 environment. `--fingerprint-noise` is left off: with it, pixels a page writes
 to a canvas read back changed, which a page can test for to spot an anti-detect
-browser. Every profile on one Mac therefore reports the same canvas hash;
-profiles are told apart by their exits. The port is
+browser. Every profile on one Mac therefore reports the same canvas hash, and
+only a profile with its own proxy exit stands apart from the others; direct
+profiles share the machine's address as well. The port is
 `--remote-debugging-port=0`, read back from `DevToolsActivePort`. A kernel
 left over from a crashed shell is stopped before the profile starts again.
 
