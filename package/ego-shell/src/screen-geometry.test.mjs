@@ -23,6 +23,12 @@ test("a view larger than the page shows it 1:1 in the middle, never enlarged", (
   assert.deepEqual(at.origin, { x: 100, y: 100 });
 });
 
+test("the frame starts on a whole CSS pixel, so a 1:1 page maps whole pixels to whole pixels", () => {
+  const at = fit({ width: 1481, height: 1001 }, PAGE, 1);
+  assert.deepEqual(at.origin, { x: 100, y: 100 });
+  assert.deepEqual(toPage({ x: 137, y: 288 }, at), { x: 37, y: 188 });
+});
+
 test("a view point maps to the page point under it", () => {
   const at = fit({ width: 640, height: 600 }, PAGE, 1);
   assert.deepEqual(toPage({ x: 0, y: 100 }, at), { x: 0, y: 0 });
@@ -58,10 +64,11 @@ test("each window of a process sits inside the available area at its own spot", 
     assert.ok(bounds.top + bounds.height <= avail.top + avail.height);
   }
   assert.equal(new Set(placed.map((b) => `${b.left},${b.top}`)).size, 4);
+  assert.deepEqual(placed[0], { left: 40, top: 37, width: 1440, height: 900 }, "the first window sits off the corner, as a person leaves it");
 });
 
-test("a window larger than the available area is shrunk to fit it", () => {
+test("a window larger than the available area is shrunk to fit inside its margins", () => {
   const avail = { left: 0, top: 25, width: 1280, height: 775 };
   const bounds = windowPlacement(avail, { width: 1440, height: 900 }, 3);
-  assert.deepEqual(bounds, { left: 0, top: 25, width: 1280, height: 775 });
+  assert.deepEqual(bounds, { left: 40, top: 37, width: 1240, height: 763 });
 });

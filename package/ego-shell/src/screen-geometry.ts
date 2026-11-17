@@ -31,10 +31,11 @@ export function fit(view: Size, viewport: Size, pageScale: number): Fit {
     view.width / viewport.width,
     view.height / viewport.height,
   );
+  // A whole-pixel origin keeps the frame sharp and a 1:1 page's points whole.
   return {
     origin: {
-      x: (view.width - viewport.width * scale) / 2,
-      y: (view.height - viewport.height * scale) / 2,
+      x: Math.floor((view.width - viewport.width * scale) / 2),
+      y: Math.floor((view.height - viewport.height * scale) / 2),
     },
     scale,
     viewport,
@@ -64,23 +65,31 @@ export function castSize(
 }
 
 const CASCADE_STEP = 28;
+/** Where the first window sits from the available area's corner. */
+const MARGIN = { left: 40, top: 12 };
 
 /**
- * The n-th window of a process cascades from the corner of the available
- * area, wholly inside it. A page reads its window position as screenX/Y, and a
- * real desktop never stacks two windows at one spot.
+ * The n-th window of a process cascades from near the corner of the
+ * available area, wholly inside it. A page reads its window position as
+ * screenX/Y, and a real desktop never stacks two windows at one spot.
  */
 export function windowPlacement(
   avail: WindowBounds,
   persona: Size,
   slot: number,
 ): WindowBounds {
-  const width = Math.min(persona.width, avail.width);
-  const height = Math.min(persona.height, avail.height);
+  const room = {
+    left: avail.left + MARGIN.left,
+    top: avail.top + MARGIN.top,
+    width: avail.width - MARGIN.left,
+    height: avail.height - MARGIN.top,
+  };
+  const width = Math.min(persona.width, room.width);
+  const height = Math.min(persona.height, room.height);
   const offset = slot * CASCADE_STEP;
   return {
-    left: avail.left + (offset % (avail.width - width + 1)),
-    top: avail.top + (offset % (avail.height - height + 1)),
+    left: room.left + (offset % (room.width - width + 1)),
+    top: room.top + (offset % (room.height - height + 1)),
     width,
     height,
   };
