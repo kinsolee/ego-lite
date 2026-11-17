@@ -31,11 +31,34 @@ function asciiKey(char) {
 }
 
 /**
- * Plays the session through Input.* (and DOM.focus for the select route) on
- * one page session, the shell's own, never the agent's.
+ * Where a session is played: `send` takes Input.* calls in page CSS pixels,
+ * and `focusSelect` is the shell's <select> route. kernelTarget plays straight
+ * into one page session; shell.mjs plays into the shell's screen view, so the
+ * same keys and mouse go through the shell's own input path.
  */
-export async function drive(cdp, sessionId, steps) {
+export function kernelTarget(cdp, sessionId) {
   const send = (method, params) => cdp.send(method, params, sessionId);
+  return {
+    send,
+    // The shell focuses a closed select instead of opening its list.
+    async focusSelect({ id, frame }) {
+      const { root } = await send("DOM.getDocument", { depth: -1, pierce: true });
+      const scope = frame === "iframe" ? findNode(root, (node) => attribute(node, "id") === "frame")?.contentDocument : root;
+      const node = scope && findNode(scope, (candidate) => attribute(candidate, "id") === id);
+      if (!node) throw new Error(`#${id} not found in ${frame}`);
+      await send("DOM.focus", { nodeId: node.nodeId });
+    },
+  };
+}
+
+/**
+ * Plays the session through Input.* on a target. Keys follow Chrome on a Mac:
+ * a key an IME or dead key takes goes down as keyCode 229 with its real key,
+ * the composed text is committed between the selecting key's down and up, and
+ * every key comes up with its real code.
+ */
+export async function drive(target, steps) {
+  const { send } = target;
   let at = { x: 500, y: 560 };
 
   const mouse = (type, extra = {}) =>
@@ -67,13 +90,13 @@ export async function drive(cdp, sessionId, steps) {
     if (COMPOSED[char]) {
       const [accent, base] = COMPOSED[char];
       const dead = { key: "Dead", ...DEAD[accent] };
-      await keyEvent("rawKeyDown", dead);
+      await keyEvent("rawKeyDown", { ...dead, vk: 229 });
       await send("Input.imeSetComposition", { text: accent, selectionStart: 1, selectionEnd: 1 });
       await sleep(PAUSE.hold);
       await keyEvent("keyUp", dead);
       await sleep(PAUSE.key);
       const letter = asciiKey(base);
-      await keyEvent("rawKeyDown", { key: "Process", code: letter.code, vk: 229 });
+      await keyEvent("rawKeyDown", { key: char, code: letter.code, vk: 229 });
       await send("Input.insertText", { text: char });
       await sleep(PAUSE.hold);
       return keyEvent("keyUp", { key: letter.key, code: letter.code, vk: letter.vk });
@@ -117,13 +140,13 @@ export async function drive(cdp, sessionId, steps) {
     async ime({ keys, commit }) {
       for (let i = 1; i <= keys.length; i += 1) {
         const letter = asciiKey(keys[i - 1]);
-        await keyEvent("rawKeyDown", { key: "Process", code: letter.code, vk: 229 });
+        await keyEvent("rawKeyDown", { key: letter.key, code: letter.code, vk: 229 });
         await send("Input.imeSetComposition", { text: keys.slice(0, i), selectionStart: i, selectionEnd: i });
         await sleep(PAUSE.hold);
         await keyEvent("keyUp", { key: letter.key, code: letter.code, vk: letter.vk });
         await sleep(PAUSE.key);
       }
-      await keyEvent("rawKeyDown", { key: "Process", code: "Space", vk: 229 });
+      await keyEvent("rawKeyDown", { key: " ", code: "Space", vk: 229 });
       await send("Input.insertText", { text: commit });
       await sleep(PAUSE.hold);
       await keyEvent("keyUp", { key: " ", code: "Space", vk: 32 });
@@ -143,15 +166,9 @@ export async function drive(cdp, sessionId, steps) {
       if (name !== "Tab") throw new Error(`unknown key ${name}`);
       await tap({ key: "Tab", code: "Tab", vk: 9, native: 48 });
     },
-    // The shell's <select> route: focus the closed select, then send the
-    // first letter of the option the human picked in the shell's list.
-    async focusSelect({ id, frame }) {
-      const { root } = await send("DOM.getDocument", { depth: -1, pierce: true });
-      const scope = frame === "iframe" ? findNode(root, (node) => attribute(node, "id") === "frame")?.contentDocument : root;
-      const node = scope && findNode(scope, (candidate) => attribute(candidate, "id") === id);
-      if (!node) throw new Error(`#${id} not found in ${frame}`);
-      await send("DOM.focus", { nodeId: node.nodeId });
-    },
+    // The select is focused, then takes the first letter of the option the
+    // human picked in the shell's list.
+    focusSelect: (step) => target.focusSelect(step, at),
     async typeAhead({ char }) {
       await tap(asciiKey(char));
     },

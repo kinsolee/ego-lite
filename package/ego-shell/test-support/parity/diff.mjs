@@ -44,6 +44,28 @@ export const NORMALISATIONS = [
   },
 ];
 
+/**
+ * Values the persona decides rather than the mode (X1 rule, 2026-11-17): the
+ * persona is one 60 Hz display, so the shell's headless side is compared with
+ * it. A headful window on this Mac reads the host's own ProMotion panel and
+ * external display instead; that is the host leaking, and is only reported.
+ */
+export const PERSONA = [
+  {
+    path: "env.<frame>.<load|end>.timing.rafHz",
+    applies: (path) => /^env\.[^.]+\.[^.]+\.timing\.rafHz$/.test(path),
+    expected: 60,
+  },
+  {
+    path: "env.<frame>.<load|end>.screen.isExtended",
+    applies: (path) => /^env\.[^.]+\.[^.]+\.screen\.isExtended$/.test(path),
+    expected: false,
+  },
+];
+
+/** Untrusted in real Chrome on a Mac too: Blink never marks compositionend trusted. */
+export const UNTRUSTED_AS_IN_CHROME = new Set(["compositionend"]);
+
 export const KNOWN_LIMITS = [
   {
     applies: (path) => /\.hasFocus$/.test(path),
@@ -111,6 +133,7 @@ function comparable(observation) {
 export function compare(headless, headful) {
   const diffs = [];
   const knownLimits = [];
+  const persona = [];
   const push = (entry) => (KNOWN_LIMITS.some((limit) => limit.applies(entry.path)) ? knownLimits : diffs).push(entry);
   const normalise = (path, value) => {
     const rule = NORMALISATIONS.find((candidate) => candidate.applies?.(path));
@@ -123,6 +146,12 @@ export function compare(headless, headful) {
     const path = rawPath.slice(1);
     const a = normalise(path, left.get(rawPath));
     const b = normalise(path, right.get(rawPath));
+    const rule = PERSONA.find((candidate) => candidate.applies(path));
+    if (rule) {
+      persona.push({ path, headless: a ?? null, headful: b ?? null, persona: rule.expected });
+      if (!Object.is(a, rule.expected)) diffs.push({ path, headless: a ?? null, persona: rule.expected });
+      continue;
+    }
     if (!Object.is(a, b)) push({ path, headless: a ?? null, headful: b ?? null });
   }
 
@@ -142,5 +171,5 @@ export function compare(headless, headful) {
       }
     }
   }
-  return { diffs, knownLimits };
+  return { diffs, knownLimits, persona };
 }

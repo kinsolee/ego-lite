@@ -30,6 +30,15 @@ function run(argv) {
   if (mode === "restore") {
     const text = $.NSString.stringWithContentsOfFileEncodingError(dir + "/manifest.json", $.NSUTF8StringEncoding, $());
     const manifest = JSON.parse(ObjC.unwrap(text));
+    // writeObjects reorders an item's types (a WebKit copy comes back with
+    // utf16 text ahead of html); declaring them keeps the order, for one item.
+    if (manifest.length === 1) {
+      const types = $.NSMutableArray.array;
+      for (const [type] of manifest[0]) types.addObject($(type));
+      pasteboard.declareTypesOwner(types, $());
+      for (const [type, file] of manifest[0]) pasteboard.setDataForType($.NSData.dataWithContentsOfFile(file), type);
+      return "restored 1";
+    }
     const objects = $.NSMutableArray.array;
     for (const entry of manifest) {
       const item = $.NSPasteboardItem.alloc.init;

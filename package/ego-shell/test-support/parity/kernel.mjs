@@ -15,11 +15,10 @@ const PROXY_VARIABLES = ["http_proxy", "https_proxy", "all_proxy", "no_proxy"];
  * Starts the kernel the way the shell does for a direct profile, in a fresh
  * user-data dir. `close()` ends the process tree and deletes the dir.
  */
-export async function launchKernel({ executable, headless, windowSize }) {
+export async function launchKernel({ executable, headless }) {
   const userDataDir = await mkdtemp(path.join(tmpdir(), "ego-parity-"));
   const persona = { seed: "111", locale: "pt-BR", timezone: "America/Sao_Paulo" };
-  const args = apostateArguments({ executable, userDataDir, ...persona });
-  if (headless) args.push("--headless=new", `--window-size=${windowSize.width},${windowSize.height}`);
+  const args = apostateArguments({ executable, userDataDir, ...persona, headless });
   const env = { ...process.env, TZ: persona.timezone };
   for (const name of Object.keys(env)) {
     if (PROXY_VARIABLES.includes(name.toLowerCase())) delete env[name];
