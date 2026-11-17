@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 
-import { Screen } from "../dist/screen.js";
+import { parseDialogAnswer, parseViewSize, Screen } from "../dist/screen.js";
 
 /** Records what the Screen asks of the link; frames are pushed by the test. */
 class FakeLink {
@@ -56,7 +56,7 @@ class FakePort {
   status(status) {
     this.statuses.push(status);
   }
-  readClipboard() {
+  async readClipboard() {
     return this.clipboard;
   }
   writeClipboard(text) {
@@ -287,6 +287,18 @@ test("a file chooser opens the native picker and answers with what was picked", 
   assert.equal(port.chooser[0].multiple, true);
   port.chooser[0].resolve(["/tmp/nota.txt"]);
   assert.deepEqual(await answered, { kind: "files", paths: ["/tmp/nota.txt"] });
+});
+
+test("the view's size and dialog answers are checked at the boundary", () => {
+  assert.deepEqual(parseViewSize({ width: 940.5, height: 716, dpr: 2 }), { view: { width: 940.5, height: 716 }, dpr: 2 });
+  for (const bad of [null, { width: -1, height: 1, dpr: 1 }, { width: 1, height: 1, dpr: 0 }, { width: "1", height: 1, dpr: 1 }]) {
+    assert.throws(() => parseViewSize(bad), /Invalid view size/);
+  }
+  assert.deepEqual(parseDialogAnswer({ accept: true, promptText: "Maria" }), { kind: "dialog", accept: true, promptText: "Maria" });
+  assert.deepEqual(parseDialogAnswer({ accept: false }), { kind: "dialog", accept: false });
+  for (const bad of [null, { accept: "yes" }, { accept: true, promptText: 3 }]) {
+    assert.throws(() => parseDialogAnswer(bad), /Invalid dialog answer/);
+  }
 });
 
 test("an agent taking the space drops the human's pending prompts", async () => {

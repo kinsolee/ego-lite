@@ -150,6 +150,7 @@ export class ApostateBackend implements KernelBackend {
         locale: profile.fingerprint.locale,
         timezone: profile.fingerprint.timezone,
         proxyPort: relay?.port,
+        headless: true,
       });
       const browser = await ApostateBrowser.connect(
         kernel.endpoint,

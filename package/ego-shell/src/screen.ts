@@ -7,8 +7,8 @@ import type { Owner } from "./task-space.js";
 export interface ScreenPort {
   frame(seq: number, jpeg: Uint8Array, at: Fit): void;
   status(status: ScreenStatus): void;
-  readClipboard(): string;
-  writeClipboard(text: string): void;
+  readClipboard(): Promise<string>;
+  writeClipboard(text: string): unknown;
   /** The native open panel; no paths when the user cancels. */
   chooseFiles(multiple: boolean): Promise<readonly string[]>;
 }
@@ -43,6 +43,26 @@ type Pending = {
 };
 
 type Cached = { jpeg: Uint8Array; viewport: Size; pageScale: number };
+
+/** Check the view's size report; everything past here trusts it. */
+export function parseViewSize(payload: unknown): { view: Size; dpr: number } {
+  const { width, height, dpr } = (payload ?? {}) as Record<string, unknown>;
+  const valid = (value: unknown, min: number): value is number =>
+    typeof value === "number" && Number.isFinite(value) && value >= min;
+  if (!valid(width, 0) || !valid(height, 0) || !valid(dpr, 0.1)) {
+    throw new Error("Invalid view size");
+  }
+  return { view: { width, height }, dpr };
+}
+
+/** Check the human's answer to a dialog card. */
+export function parseDialogAnswer(payload: unknown): PromptAnswer {
+  const { accept, promptText } = (payload ?? {}) as Record<string, unknown>;
+  if (typeof accept !== "boolean") throw new Error("Invalid dialog answer");
+  if (promptText === undefined) return { kind: "dialog", accept };
+  if (typeof promptText !== "string") throw new Error("Invalid dialog answer");
+  return { kind: "dialog", accept, promptText };
+}
 
 /** Tabs whose last frame is kept to draw at once when they come back. */
 const CACHED_TABS = 16;
@@ -223,7 +243,7 @@ export class Screen {
       return;
     }
     if (command === "paste") {
-      const text = this.#port.readClipboard();
+      const text = await this.#port.readClipboard();
       if (text) await link.putClipboard(targetId, text).catch(() => {});
     }
     await link.dispatch(targetId, translate(input, at));

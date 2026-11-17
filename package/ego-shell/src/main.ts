@@ -4,8 +4,11 @@ import { pathToFileURL } from "node:url";
 import {
   app,
   BaseWindow,
+  clipboard,
+  dialog,
   ipcMain,
   WebContentsView,
+  type IpcMainEvent,
   type IpcMainInvokeEvent,
 } from "electron";
 
@@ -19,6 +22,12 @@ import {
   redactProfile,
 } from "./profile-store.js";
 import { KernelInstaller } from "./kernel-install.js";
+import {
+  parseDialogAnswer,
+  parseViewSize,
+  Screen,
+  type ScreenStatus,
+} from "./screen.js";
 import { ElectronBackend } from "./spaces.js";
 import { TaskSpaces } from "./task-space.js";
 import {
@@ -31,6 +40,7 @@ import {
 const APP_ROOT = path.resolve(import.meta.dirname, "..");
 const UI_BASE = pathToFileURL(path.join(APP_ROOT, "ui")).href;
 const PRELOAD = path.join(APP_ROOT, "dist", "preload.cjs");
+const SCREEN_PRELOAD = path.join(APP_ROOT, "dist", "screen-preload.cjs");
 
 if (process.env.EGO_SHELL_USER_DATA) {
   app.setPath("userData", path.resolve(process.env.EGO_SHELL_USER_DATA));
@@ -80,6 +90,66 @@ async function main(): Promise<void> {
   const sendUi = (channel: string, payload?: unknown) => {
     if (!ui.webContents.isDestroyed()) ui.webContents.send(channel, payload);
   };
+
+  // Every Apostate space is drawn here while selected. It never sleeps: a
+  // throttled renderer would hold back the frame acks the screencast waits on.
+  const screenView = new WebContentsView({
+    webPreferences: {
+      preload: SCREEN_PRELOAD,
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false,
+    },
+  });
+  const sendScreen = (channel: string, payload: unknown) => {
+    if (!screenView.webContents.isDestroyed()) {
+      screenView.webContents.send(channel, payload);
+    }
+  };
+  let screenStatus: ScreenStatus = { spaceId: null, holder: null, prompt: null };
+  const screen = new Screen({
+    frame: (seq, jpeg, fit) => sendScreen("screen:frame", { seq, jpeg, fit }),
+    status: (status) => {
+      screenStatus = status;
+      sendScreen("screen:status", status);
+    },
+    readClipboard: () => clipboard.readText(),
+    writeClipboard: (text) => clipboard.writeText(text),
+    chooseFiles: async (multiple) => {
+      const picked = await dialog.showOpenDialog(win, {
+        properties: multiple ? ["openFile", "multiSelections"] : ["openFile"],
+      });
+      return picked.canceled ? [] : picked.filePaths;
+    },
+  });
+  /** Messages from the screen view only; it reaches nothing else in the shell. */
+  const fromScreen = (
+    channel: string,
+    handler: (payload: unknown) => void,
+  ) => {
+    ipcMain.on(channel, (event: IpcMainEvent, payload: unknown) => {
+      if (event.sender !== screenView.webContents) return;
+      try {
+        handler(payload);
+      } catch {
+        // A malformed message from the view is dropped.
+      }
+    });
+  };
+  fromScreen("screen:input", (payload) => screen.receive(payload));
+  fromScreen("screen:drawn", (seq) => {
+    if (Number.isInteger(seq)) screen.drawn(seq as number);
+  });
+  fromScreen("screen:resize", (payload) => {
+    const { view, dpr } = parseViewSize(payload);
+    screen.resize(view, dpr);
+  });
+  fromScreen("screen:answer", (payload) => screen.answer(parseDialogAnswer(payload)));
+  fromScreen("screen:take-control", () => {
+    if (screenStatus.spaceId === null) return;
+    void spaces.get(screenStatus.spaceId)?.command({ type: "takeControl" });
+  });
   // Tabs keep reporting while the app quits, after the window is gone.
   const live = (action: () => void) => {
     if (!win.isDestroyed()) action();
@@ -111,6 +181,7 @@ async function main(): Promise<void> {
     ui,
     spaces,
     push: (state) => sendUi("workbench:state", state),
+    shared: [screenView],
   });
   ui.webContents.on("did-finish-load", () => workbench.changed());
 
@@ -121,7 +192,11 @@ async function main(): Promise<void> {
   spaces.register("electron", new ElectronBackend(runtime, spaces));
   spaces.register(
     "apostate",
-    new ApostateBackend({ dataDir: userData, host: spaces }),
+    new ApostateBackend({
+      dataDir: userData,
+      host: spaces,
+      screen: { view: screenView, screen },
+    }),
   );
 
   /** Run a UI request, refusing callers that are not the shell's own pages. */
@@ -131,7 +206,12 @@ async function main(): Promise<void> {
   ) => {
     ipcMain.handle(channel, async (event, payload): Promise<Reply> => {
       const frame = event.senderFrame;
-      if (!frame || frame.parent || !frame.url.startsWith(UI_BASE)) {
+      if (
+        event.sender !== ui.webContents ||
+        !frame ||
+        frame.parent ||
+        !frame.url.startsWith(UI_BASE)
+      ) {
         return { ok: false, error: "Request refused" };
       }
       try {
@@ -229,6 +309,7 @@ async function main(): Promise<void> {
   }
 
   void ui.webContents.loadFile(path.join(APP_ROOT, "ui", "workbench.html"));
+  void screenView.webContents.loadFile(path.join(APP_ROOT, "ui", "screen.html"));
 }
 
 main().catch((error) => {
