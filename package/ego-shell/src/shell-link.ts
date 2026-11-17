@@ -136,6 +136,16 @@ export class ShellLink {
     return targetId;
   }
 
+  /** Where the tab is in its history, which Chromium does not announce. */
+  async history(targetId: string): Promise<{ currentIndex: number; entryIds: number[] }> {
+    const { id } = await this.#page(targetId);
+    const { currentIndex, entries } = await this.#send("Page.getNavigationHistory", {}, id);
+    if (!Number.isInteger(currentIndex) || !Array.isArray(entries)) {
+      throw new Error("The tab has no history to read");
+    }
+    return { currentIndex, entryIds: entries.map((entry: { id: number }) => entry.id) };
+  }
+
   /** `screen.avail*` as the page reads it. */
   async availArea(targetId: string): Promise<WindowBounds> {
     const { id } = await this.#page(targetId);

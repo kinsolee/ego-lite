@@ -36,9 +36,6 @@ export async function startFakeBrowser({ hang = [] } = {}) {
   let counter = 0;
   let lastWindow = 0;
   let activeWindow = 0;
-  /** windowId -> the targetId its tab strip shows */
-  const shown = new Map();
-  let minimised = false;
 
   const send = (socket, message) => {
     if (socket.readyState === 1) socket.send(JSON.stringify(message));
@@ -73,7 +70,6 @@ export async function startFakeBrowser({ hang = [] } = {}) {
     };
     if (!windows.has(windowId)) windows.set(windowId, { left: 22, top: 47, width: 1200, height: 800, windowState: "normal" });
     targets.set(targetId, { info, windowId });
-    if (!subtype && (type ?? "page") === "page") shown.set(windowId, targetId);
     browserEvent("Target.targetCreated", { targetInfo: info });
     return targetId;
   }
@@ -128,7 +124,6 @@ export async function startFakeBrowser({ hang = [] } = {}) {
         const target = targets.get(params.targetId);
         if (!target) throw new Error("No target with given id found");
         activeWindow = target.windowId;
-        shown.set(target.windowId, params.targetId);
         return {};
       }
       case "Target.closeTarget":
@@ -180,6 +175,9 @@ export async function startFakeBrowser({ hang = [] } = {}) {
       const value = answer(params.expression, session.targetId);
       if (value !== undefined) return { result: { type: typeof value, value } };
     }
+    if (params.expression.includes("screen.availLeft")) {
+      return { result: { type: "object", value: { left: 0, top: 25, width: 1920, height: 1055 } } };
+    }
     return { result: { type: "undefined" } };
   }
 
@@ -230,11 +228,6 @@ export async function startFakeBrowser({ hang = [] } = {}) {
         return { node: { nodeName: hitNodes[params.backendNodeId - 1] ?? "DIV", backendNodeId: params.backendNodeId } };
       case "Runtime.evaluate":
         if (params.contextId !== undefined) return isolatedEvaluate(session, params);
-        if (params.expression === "document.visibilityState") {
-          const { windowId } = targets.get(targetId);
-          const visible = !minimised && shown.get(windowId) === targetId;
-          return { result: { type: "string", value: visible ? "visible" : "hidden" } };
-        }
         return replies.get(method) ?? {};
       default:
         return replies.get(method) ?? {};
@@ -303,14 +296,6 @@ export async function startFakeBrowser({ hang = [] } = {}) {
       return addTarget({ ...options, windowId });
     },
     closePage: removeTarget,
-    /** The user picks a tab in the tab strip; Chromium announces nothing. */
-    selectTab(targetId) {
-      shown.set(targets.get(targetId).windowId, targetId);
-    },
-    /** Every window is minimised, so no tab is visible. */
-    minimise(value = true) {
-      minimised = value;
-    },
     /** A page sets its title after loading; Chromium announces nothing. */
     retitle(targetId, title) {
       targets.get(targetId).info.title = title;

@@ -121,8 +121,6 @@ export abstract class TaskSpace implements RoutedSpace {
 
   /** Bring titles and URLs up to date when the kernel does not announce them. */
   async refreshTabs(): Promise<void> {}
-  /** Follow a tab the user switched to when the kernel does not announce it. */
-  async syncActiveTab(): Promise<void> {}
   /** Undo what an agent left switched on in the pages, such as dialog interception. */
   protected abstract releaseAgentState(): void;
   /** The space's name, owner, agent state or tabs changed. */

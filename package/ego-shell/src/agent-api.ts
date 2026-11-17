@@ -92,7 +92,6 @@ export class AgentApi implements AgentHandlers {
       }
       case "listTabs": {
         await space.refreshTabs();
-        await space.syncActiveTab();
         const active = space.activeTab();
         return {
           tabs: space.tabs().map((tab, index) => {
@@ -102,7 +101,6 @@ export class AgentApi implements AgentHandlers {
         };
       }
       case "snapshot": {
-        await space.syncActiveTab();
         const tab = space.activeTab();
         if (!tab) {
           throw new EgoError(

@@ -1,7 +1,7 @@
 import { rm } from "node:fs/promises";
 import path from "node:path";
 
-import { ApostateBrowser } from "./apostate-browser.js";
+import { ApostateBrowser, type ScreenHandle } from "./apostate-browser.js";
 import { CdpTimeoutError } from "./browser-cdp.js";
 import { launchApostate, type RunningKernel } from "./apostate-launcher.js";
 import { locateApostate, type KernelBinary } from "./kernel.js";
@@ -38,6 +38,7 @@ export class ApostateBackend implements KernelBackend {
   readonly #host: SpaceHost;
   readonly #locate: () => Promise<KernelBinary>;
   readonly #commandTimeoutMs: number | undefined;
+  readonly #screen: ScreenHandle | undefined;
   readonly #running = new Map<string, RunningProfile>();
   /** Every open, update, release and erase of a profile runs in this queue, one at a time. */
   readonly #queue = new ProfileQueue();
@@ -52,9 +53,12 @@ export class ApostateBackend implements KernelBackend {
     locate?: () => Promise<KernelBinary>;
     /** How long the shell waits for the kernel to answer one of its own commands. */
     commandTimeoutMs?: number;
+    /** Where the selected space is drawn; absent when nothing shows the spaces. */
+    screen?: ScreenHandle;
   }) {
     this.#dataDir = options.dataDir;
     this.#commandTimeoutMs = options.commandTimeoutMs;
+    this.#screen = options.screen;
     this.#host = options.host;
     this.#locate =
       options.locate ?? (() => locateApostate({ dataDir: options.dataDir }));
@@ -151,7 +155,7 @@ export class ApostateBackend implements KernelBackend {
         kernel.endpoint,
         profile,
         this.#host,
-        this.#commandTimeoutMs,
+        { commandTimeoutMs: this.#commandTimeoutMs, screen: this.#screen },
       );
       const running: RunningProfile = {
         kernel,
