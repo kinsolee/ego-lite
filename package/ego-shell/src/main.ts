@@ -189,7 +189,20 @@ async function main(): Promise<void> {
     const { spaceId, command } = parseCommandEnvelope(payload);
     return spaces.get(spaceId)?.command(command);
   });
-  serve("workbench:layout", (payload) => workbench.layout(parseLayout(payload)));
+  serve("workbench:layout", (payload) => {
+    // The page measures in its own CSS pixels, which a zoomed page scales.
+    const { rect, covered } = parseLayout(payload);
+    const zoom = ui.webContents.getZoomFactor();
+    workbench.layout({
+      covered,
+      rect: {
+        x: Math.round(rect.x * zoom),
+        y: Math.round(rect.y * zoom),
+        width: Math.round(rect.width * zoom),
+        height: Math.round(rect.height * zoom),
+      },
+    });
+  });
 
   const server: AgentServer = await startAgentServer({
     endpointFile: path.join(userData, "agent-endpoint.json"),

@@ -52,6 +52,9 @@ export class Tab implements RoutedTab {
   #overrides: TabOverrides;
   /** A document committed and has not been drawn yet, so it cannot be hit-tested. */
   #undrawn = true;
+  /** Counts committed documents, so a draw that raced a navigation does not count. */
+  #documents = 0;
+  #drawing?: Promise<void>;
   readonly #highlight = new MouseHighlight({
     attach: async () => {
       const { sessionId } = await this.webContents.debugger.sendCommand(
@@ -166,8 +169,11 @@ export class Tab implements RoutedTab {
     if (!sessionId && this.#undrawn && startsGesture(method, params)) {
       await this.#draw();
     }
+    const documents = this.#documents;
     const result = await contents.debugger.sendCommand(method, params, sessionId);
-    if (!sessionId && method === "Page.captureScreenshot") this.#undrawn = false;
+    if (!sessionId && method === "Page.captureScreenshot" && this.#documents === documents) {
+      this.#undrawn = false;
+    }
     return result;
   }
 
@@ -232,7 +238,13 @@ export class Tab implements RoutedTab {
       );
     }
     contents.on("did-frame-navigate", () => {
+      this.#documents++;
       this.#undrawn = true;
+    });
+    // A frame in another process has no size until its parent draws, so an
+    // agent could neither see nor click into it; draw as soon as it loads.
+    contents.on("did-frame-finish-load", () => {
+      if (this.#undrawn) this.#draw().catch(() => {});
     });
     contents.once("destroyed", () => this.#events.destroyed(this));
     await this.#attach();
@@ -245,13 +257,21 @@ export class Tab implements RoutedTab {
    * that is not on top of the window, or whose window is hidden, may never get
    * one. Capturing a pixel makes the renderer draw.
    */
-  async #draw(): Promise<void> {
-    await this.webContents.debugger.sendCommand("Page.captureScreenshot", {
-      format: "jpeg",
-      quality: 1,
-      clip: { x: 0, y: 0, width: 1, height: 1, scale: 1 },
-    });
-    this.#undrawn = false;
+  #draw(): Promise<void> {
+    const documents = this.#documents;
+    this.#drawing ??= this.webContents.debugger
+      .sendCommand("Page.captureScreenshot", {
+        format: "jpeg",
+        quality: 1,
+        clip: { x: 0, y: 0, width: 1, height: 1, scale: 1 },
+      })
+      .then(() => {
+        if (this.#documents === documents) this.#undrawn = false;
+      })
+      .finally(() => {
+        this.#drawing = undefined;
+      });
+    return this.#drawing;
   }
 
   async #attach(): Promise<void> {

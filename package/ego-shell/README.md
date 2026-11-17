@@ -215,8 +215,10 @@ EGO_SHELL_APOSTATE_EXECUTABLE=<path to Chromium.app>/Contents/MacOS/Chromium npm
   the next time it is started or a task space is opened on it.
 - Built-in kernel: Chromium hit-tests input against the last frame a page
   drew, and a page in an unselected space or a hidden window may not draw
-  after it navigates. Before the first click, wheel, touch or drag on a newly
-  loaded document the shell captures one pixel of it, which makes it draw.
+  after it navigates. A frame in another process, such as a payment iframe,
+  has no size until its parent draws. When any frame of a tab finishes
+  loading, and before the first click, wheel, touch or drag on a new
+  document, the shell captures one pixel of the tab, which makes it draw.
 - Apostate: Chromium does not announce a tab the user picks in the tab
   strip, so the shell asks each tab of the window whether it is visible when
   an agent lists tabs or takes a snapshot. While the window is minimised, no
