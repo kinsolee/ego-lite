@@ -234,6 +234,36 @@ test("Cmd+V puts the host clipboard into the kernel before the key", async () =>
   assert.deepEqual(a.link.log.slice(1), ["put clipboard Olá mundo", "Input.dispatchKeyEvent rawKeyDown"]);
 });
 
+test("a paste of what the same kernel copied keeps the kernel's own rich clipboard", async () => {
+  const { port, screen } = setup();
+  const a = source(1, "A1");
+  const b = source(2, "B1");
+  screen.show(a);
+  await settle();
+  a.link.frame();
+  a.link.selection = "Olá mundo";
+  screen.receive(key("down", "KeyX", 88, 4));
+  screen.receive(key("down", "KeyV", 86, 4));
+  await settle();
+  assert.deepEqual(a.link.log.slice(1), ["read selection", "Input.dispatchKeyEvent rawKeyDown", "Input.dispatchKeyEvent rawKeyDown"]);
+  assert.equal(port.clipboard, "Olá mundo");
+
+  screen.show(b);
+  await settle();
+  b.link.frame();
+  screen.receive(key("down", "KeyV", 86, 4));
+  await settle();
+  assert.deepEqual(b.link.log.slice(1), ["put clipboard Olá mundo", "Input.dispatchKeyEvent rawKeyDown"], "another kernel gets the host's text");
+
+  screen.show(a);
+  await settle();
+  a.link.frame();
+  port.clipboard = "copiado noutro app";
+  screen.receive(key("down", "KeyV", 86, 4));
+  await settle();
+  assert.equal(a.link.log.at(-2), "put clipboard copiado noutro app", "a newer host copy replaces the kernel's");
+});
+
 test("input keeps its order even when a step waits on the page", async () => {
   const { screen } = setup();
   const a = source(1, "A1");

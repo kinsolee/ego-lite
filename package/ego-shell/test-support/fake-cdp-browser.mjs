@@ -31,6 +31,10 @@ export async function startFakeBrowser({ hang = [] } = {}) {
   const hits = new Map();
   /** Answers isolated-world evaluations the fake does not model itself. */
   const evaluations = [];
+  /** targetId -> ids of in-process child frames, under the main frame */
+  const childFrames = new Map();
+  /** isolated world's executionContextId -> the frame it was made in */
+  const worlds = new Map();
   /** socket -> { index, discovering } */
   const sockets = new Map();
   let counter = 0;
@@ -172,7 +176,7 @@ export async function startFakeBrowser({ hang = [] } = {}) {
       return { result: { type: "undefined" } };
     }
     for (const answer of evaluations) {
-      const value = answer(params.expression, session.targetId);
+      const value = answer(params.expression, session.targetId, worlds.get(params.contextId));
       if (value !== undefined) return { result: { type: typeof value, value } };
     }
     if (params.expression.includes("screen.availLeft")) {
@@ -208,9 +212,17 @@ export async function startFakeBrowser({ hang = [] } = {}) {
         session.interceptFiles = Boolean(params.enabled);
         return {};
       case "Page.getFrameTree":
-        return { frameTree: { frame: { id: `F-${targetId}`, url: targets.get(targetId).info.url } } };
-      case "Page.createIsolatedWorld":
-        return { executionContextId: ++counter };
+        return {
+          frameTree: {
+            frame: { id: `F-${targetId}`, url: targets.get(targetId).info.url },
+            childFrames: (childFrames.get(targetId) ?? []).map((id) => ({ frame: { id, parentId: `F-${targetId}` } })),
+          },
+        };
+      case "Page.createIsolatedWorld": {
+        const executionContextId = ++counter;
+        worlds.set(executionContextId, params.frameId);
+        return { executionContextId };
+      }
       case "Page.startScreencast":
         session.cast = { params, frame: 0, waiting: false };
         return {};
@@ -269,8 +281,10 @@ export async function startFakeBrowser({ hang = [] } = {}) {
     calls,
     replies,
     failures,
-    /** Answer isolated-world evaluations: `(expression, targetId) => value | undefined`. */
+    /** Answer isolated-world evaluations: `(expression, targetId, frameId) => value | undefined`. */
     evaluations,
+    /** In-process child frames of a target's page, by frame id. */
+    childFrames,
     /** Commands a session received, optionally only one method. */
     sent(sessionId, method) {
       return calls

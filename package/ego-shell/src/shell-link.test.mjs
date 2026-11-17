@@ -118,6 +118,27 @@ test("the copied text and the pasted text pass through the focused frame's isola
   assert.equal(grants.length, 0, "the page is never granted clipboard access");
 });
 
+test("copy and paste use the focused frame, even a cross-origin one in the page's own process", async (t) => {
+  const { chromium, link, page } = await setup(t);
+  chromium.childFrames.set(page, ["F-shop", "F-pay"]);
+  const focused = new Set([`F-${page}`, "F-pay"]);
+  const writtenIn = [];
+  chromium.evaluations.push((expression, _target, frameId) => {
+    if (expression === "document.hasFocus()") return focused.has(frameId);
+    if (expression.includes("getSelection")) return `selection in ${frameId}`;
+    if (expression.includes("clipboard.writeText")) {
+      writtenIn.push(frameId);
+      return "ok";
+    }
+    return undefined;
+  });
+  assert.equal(await link.selectedText(page), "selection in F-pay");
+  await link.putClipboard(page, "Olá");
+  assert.deepEqual(writtenIn, ["F-pay"]);
+  focused.delete("F-pay");
+  assert.equal(await link.selectedText(page), `selection in F-${page}`);
+});
+
 test("while the user holds a tab, its dialogs and file choosers are answered through the link", async (t) => {
   const { chromium, link, page } = await setup(t);
   const asked = [];

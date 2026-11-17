@@ -37,6 +37,9 @@ export type Asker = (prompt: HumanPrompt) => Promise<PromptAnswer>;
 
 type Listener = (method: string, params: any) => void;
 
+/** A frame of a page: the session that renders it, and its id there (its main frame if absent). */
+type FrameRef = { session: ShellSessionId; frameId?: string };
+
 type PageSession = {
   id: ShellSessionId;
   /** Out-of-process frames below the page, in the order they attached. */
@@ -233,18 +236,19 @@ export class ShellLink {
    * copies the text over itself; the page is never granted clipboard access.
    */
   async selectedText(targetId: string): Promise<string> {
-    const session = await this.#focusedFrame(targetId);
-    const text = await this.#evaluate(session, SELECTED_TEXT);
+    const { session, frameId } = await this.#focusedFrame(targetId);
+    const text = await this.#evaluate(session, SELECTED_TEXT, {}, frameId);
     return typeof text === "string" ? text : "";
   }
 
   /** Put host text on the kernel's clipboard, ahead of a Cmd+V. */
   async putClipboard(targetId: string, text: string): Promise<void> {
-    const session = await this.#focusedFrame(targetId);
+    const { session, frameId } = await this.#focusedFrame(targetId);
     await this.#evaluate(
       session,
       `navigator.clipboard.writeText(${JSON.stringify(text)}).then(() => "ok")`,
       { userGesture: true, awaitPromise: true },
+      frameId,
     );
   }
 
@@ -417,21 +421,44 @@ export class ShellLink {
     }, sessionId).catch(() => {});
   }
 
-  /** The deepest frame whose document has focus, the page itself otherwise. */
-  async #focusedFrame(targetId: string): Promise<ShellSessionId> {
-    const page = await this.#page(targetId);
-    const focused = await Promise.all(
-      page.frames.map((frame) =>
-        this.#evaluate(frame, "document.hasFocus()").catch(() => false),
-      ),
-    );
-    return page.frames.findLast((_, index) => focused[index] === true) ?? page.id;
+  /** Every frame a session renders, parents before their children. */
+  async #framesOf(session: ShellSessionId): Promise<FrameRef[]> {
+    const { frameTree } = await this.#send("Page.getFrameTree", {}, session);
+    const frames: FrameRef[] = [];
+    const walk = (node: { frame: { id: string }; childFrames?: unknown[] }) => {
+      frames.push({ session, frameId: node.frame.id });
+      for (const child of node.childFrames ?? []) walk(child as typeof node);
+    };
+    walk(frameTree);
+    return frames;
   }
 
-  async #isolatedWorld(sessionId: ShellSessionId): Promise<number> {
-    const { frameTree } = await this.#send("Page.getFrameTree", {}, sessionId);
+  /**
+   * The deepest frame whose document has focus, the page's main frame
+   * otherwise. A cross-origin frame may share the page's process, so frames
+   * of every session are asked, not only out-of-process ones.
+   */
+  async #focusedFrame(targetId: string): Promise<FrameRef> {
+    const page = await this.#page(targetId);
+    const frames = (
+      await Promise.all(
+        [page.id, ...page.frames].map((session) =>
+          this.#framesOf(session).catch(() => []),
+        ),
+      )
+    ).flat();
+    const focused = await Promise.all(
+      frames.map((frame) =>
+        this.#evaluate(frame.session, "document.hasFocus()", {}, frame.frameId).catch(() => false),
+      ),
+    );
+    return frames.findLast((_, index) => focused[index] === true) ?? { session: page.id };
+  }
+
+  async #isolatedWorld(sessionId: ShellSessionId, frameId?: string): Promise<number> {
+    const frame = frameId ?? (await this.#send("Page.getFrameTree", {}, sessionId)).frameTree.frame.id;
     const { executionContextId } = await this.#send("Page.createIsolatedWorld", {
-      frameId: frameTree.frame.id,
+      frameId: frame,
       worldName: "ego-shell",
     }, sessionId);
     return executionContextId;
@@ -442,8 +469,9 @@ export class ShellLink {
     sessionId: ShellSessionId,
     expression: string,
     options: { userGesture?: boolean; awaitPromise?: boolean } = {},
+    frameId?: string,
   ): Promise<any> {
-    const contextId = await this.#isolatedWorld(sessionId);
+    const contextId = await this.#isolatedWorld(sessionId, frameId);
     const reply = await this.#send("Runtime.evaluate", {
       contextId,
       expression,

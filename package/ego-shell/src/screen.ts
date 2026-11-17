@@ -97,6 +97,8 @@ export class Screen {
   #inputs: Promise<void> = Promise.resolve();
   #swallowRelease = false;
   readonly #prompts: Pending[] = [];
+  /** The text each kernel's clipboard holds, as far as the shell knows. */
+  readonly #kernelClipboard = new WeakMap<ScreenLink, string>();
 
   constructor(port: ScreenPort) {
     this.#port = port;
@@ -239,12 +241,20 @@ export class Screen {
     if (command === "copy" || command === "cut") {
       const text = await link.selectedText(targetId).catch(() => "");
       await link.dispatch(targetId, translate(input, at));
-      if (text) this.#port.writeClipboard(text);
+      if (text) {
+        this.#port.writeClipboard(text);
+        this.#kernelClipboard.set(link, text);
+      }
       return;
     }
+    // A kernel's own copy also holds the HTML a page pastes; the host copy is
+    // text only, so it replaces the kernel's only when the host has moved on.
     if (command === "paste") {
       const text = await this.#port.readClipboard();
-      if (text) await link.putClipboard(targetId, text).catch(() => {});
+      if (text && this.#kernelClipboard.get(link) !== text) {
+        await link.putClipboard(targetId, text).catch(() => {});
+        this.#kernelClipboard.set(link, text);
+      }
     }
     await link.dispatch(targetId, translate(input, at));
   }
