@@ -2,10 +2,12 @@ import { CdpConnection, type CdpEvent } from "./browser-cdp.js";
 import { type ChildTarget, type TargetInfo } from "./cdp-router.js";
 import { MouseHighlight } from "./mouse-highlight.js";
 import type { Profile } from "./profile-store.js";
+import { describeProxy } from "./proxy-config.js";
 import {
   TaskSpace,
   type Owner,
   type SpaceHost,
+  type SpaceState,
   type TaskTab,
 } from "./task-space.js";
 
@@ -278,6 +280,52 @@ export class ApostateSpace extends TaskSpace {
 
   close(): Promise<void> {
     return this.#browser.closeSpace(this);
+  }
+
+  /** Chromium does not say where a tab is in its history without being asked, so the arrows stay off. */
+  state(): SpaceState {
+    return {
+      spaceId: this.id,
+      name: this.name,
+      profileName: this.profile.name,
+      proxy: describeProxy(this.profile.proxy),
+      ownership: this.ownership,
+      agentState: this.agentState,
+      tabs: this.#tabs.map((tab) => {
+        const { targetId, title, url } = tab.targetInfo();
+        return { targetId, title, url, active: tab === this.#active, loading: false };
+      }),
+      canGoBack: false,
+      canGoForward: false,
+    };
+  }
+
+  protected async navigate(url: string): Promise<void> {
+    await this.#active?.sendOwn("Page.navigate", { url });
+  }
+
+  protected back(): Promise<void> {
+    return this.#step(-1);
+  }
+
+  protected forward(): Promise<void> {
+    return this.#step(1);
+  }
+
+  protected async reload(): Promise<void> {
+    await this.#active?.sendOwn("Page.reload");
+  }
+
+  async #step(offset: number): Promise<void> {
+    const tab = this.#active;
+    if (!tab) return;
+    const { currentIndex, entries } = (await tab.sendOwn(
+      "Page.getNavigationHistory",
+    )) as { currentIndex: number; entries: { id: number }[] };
+    const entry = entries[currentIndex + offset];
+    if (entry) {
+      await tab.sendOwn("Page.navigateToHistoryEntry", { entryId: entry.id });
+    }
   }
 
   override setOwnership(owner: Owner): void {

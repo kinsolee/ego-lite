@@ -13,8 +13,8 @@ import {
   redactProfile,
 } from "./profile-store.js";
 import { KernelInstaller } from "./kernel-install.js";
-import { ElectronBackend, type ChromeCommand } from "./spaces.js";
-import { TaskSpaces } from "./task-space.js";
+import { ElectronBackend } from "./spaces.js";
+import { TaskSpaces, type ChromeCommand } from "./task-space.js";
 
 const APP_ROOT = path.resolve(import.meta.dirname, "..");
 const UI_BASE = pathToFileURL(path.join(APP_ROOT, "ui")).href;

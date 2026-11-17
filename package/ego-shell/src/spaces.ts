@@ -12,45 +12,13 @@ import {
   type KernelBackend,
   type Owner,
   type SpaceHost,
+  type SpaceState,
 } from "./task-space.js";
-
-export type SpaceState = {
-  spaceId: number;
-  name: string;
-  profileName: string;
-  proxy: string;
-  ownership: Owner;
-  agentState: string;
-  tabs: {
-    targetId: string;
-    title: string;
-    url: string;
-    active: boolean;
-    loading: boolean;
-  }[];
-  canGoBack: boolean;
-  canGoForward: boolean;
-};
-
-export type ChromeCommand =
-  | { type: "newTab" }
-  | { type: "closeTab"; targetId: string }
-  | { type: "activateTab"; targetId: string }
-  | { type: "navigate"; url: string }
-  | { type: "back" | "forward" | "reload" | "takeControl" };
 
 export type UiFiles = { chromePage: string; preload: string };
 
 // Must match the toolbar height in ui/style.css.
 const TOOLBAR_HEIGHT = 84;
-
-/** What a person typed into the address bar, as a loadable URL. */
-function typedUrl(input: string): string {
-  const text = input.trim();
-  if (/^([a-z][a-z0-9+.-]*:\/\/|about:|data:|file:)/i.test(text)) return text;
-  const local = /^(localhost|127\.|\[::1\])/i.test(text);
-  return `${local ? "http" : "https"}://${text}`;
-}
 
 /** A task space on the Electron kernel: a shell window with a tab strip. */
 export class Space extends TaskSpace {
@@ -159,33 +127,20 @@ export class Space extends TaskSpace {
     this.publish();
   }
 
-  async command(command: ChromeCommand): Promise<void> {
-    const contents = this.#active?.webContents;
-    switch (command.type) {
-      case "newTab":
-        await this.createTab("about:blank");
-        return;
-      case "closeTab":
-        return this.closeTab(command.targetId);
-      case "activateTab":
-        return this.activateTab(command.targetId);
-      case "navigate":
-        if (!contents) await this.createTab(typedUrl(command.url));
-        else contents.loadURL(typedUrl(command.url)).catch(() => {});
-        return;
-      case "back":
-        contents?.navigationHistory.goBack();
-        return;
-      case "forward":
-        contents?.navigationHistory.goForward();
-        return;
-      case "reload":
-        contents?.reload();
-        return;
-      case "takeControl":
-        this.setOwnership("user");
-        return;
-    }
+  protected async navigate(url: string): Promise<void> {
+    this.#active?.webContents.loadURL(url).catch(() => {});
+  }
+
+  protected async back(): Promise<void> {
+    this.#active?.webContents.navigationHistory.goBack();
+  }
+
+  protected async forward(): Promise<void> {
+    this.#active?.webContents.navigationHistory.goForward();
+  }
+
+  protected async reload(): Promise<void> {
+    this.#active?.webContents.reload();
   }
 
   state(): SpaceState {

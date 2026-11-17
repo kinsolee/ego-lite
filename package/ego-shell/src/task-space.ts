@@ -82,7 +82,42 @@ export abstract class TaskSpace implements RoutedSpace {
   ): Promise<unknown>;
   /** Show the user where the agent is about to act, in viewport CSS pixels. */
   abstract highlightMouse(x: number, y: number): Promise<void>;
+  /** End the space: close its tabs and leave the host. Idempotent; the only way a space ends. */
   abstract close(): Promise<void>;
+  abstract state(): SpaceState;
+  /** Load a URL in the active tab. */
+  protected abstract navigate(url: string): Promise<void>;
+  protected abstract back(): Promise<void>;
+  protected abstract forward(): Promise<void>;
+  protected abstract reload(): Promise<void>;
+
+  async command(command: ChromeCommand): Promise<void> {
+    switch (command.type) {
+      case "newTab":
+        await this.createTab("about:blank");
+        return;
+      case "closeTab":
+        return this.closeTab(command.targetId);
+      case "activateTab":
+        return this.activateTab(command.targetId);
+      case "navigate": {
+        const url = typedUrl(command.url);
+        if (this.activeTab()) await this.navigate(url);
+        else await this.createTab(url);
+        return;
+      }
+      case "back":
+        return this.back();
+      case "forward":
+        return this.forward();
+      case "reload":
+        return this.reload();
+      case "takeControl":
+        this.setOwnership("user");
+        return;
+    }
+  }
+
   /** Bring titles and URLs up to date when the kernel does not announce them. */
   async refreshTabs(): Promise<void> {}
   /** Follow a tab the user switched to when the kernel does not announce it. */
