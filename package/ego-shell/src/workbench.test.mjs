@@ -295,6 +295,18 @@ test("a space hears when it is selected, once on subscribing and again when pick
   assert.deepEqual(heard, [true, false, true, true]);
 });
 
+test("a selected space that closes hears that it is no longer selected", async () => {
+  const { workbench, openSpace, close } = setup();
+  const first = openSpace(1);
+  await tick();
+  workbench.select(1);
+  const heard = [];
+  first.stage.onSelected((selected) => heard.push(selected));
+  close(1);
+  await tick();
+  assert.deepEqual(heard, [true, false]);
+});
+
 test("reveal shows the window", () => {
   const { window, workbench } = setup();
   workbench.reveal();

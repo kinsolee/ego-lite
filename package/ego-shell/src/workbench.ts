@@ -193,6 +193,10 @@ export class Workbench<V> implements Stages<V> {
   #reconcile(): void {
     const previous = this.#selection;
     this.#selection = reconcile(previous, this.#refs());
+    const { selected } = this.#selection;
+    const moved = selected !== previous.selected;
+    // A closed space still has its listeners until its slot goes below.
+    if (moved && previous.selected !== null) this.#notify(previous.selected, false);
     const alive = new Set(this.#selection.order.map((space) => space.id));
     for (const { id } of previous.order) {
       const slot = this.#slots.get(id);
@@ -203,11 +207,7 @@ export class Workbench<V> implements Stages<V> {
       slot.views.clear();
       this.#slots.delete(id);
     }
-    const { selected } = this.#selection;
-    if (selected !== previous.selected) {
-      if (previous.selected !== null) this.#notify(previous.selected, false);
-      if (selected !== null) this.#notify(selected, true);
-    }
+    if (moved && selected !== null) this.#notify(selected, true);
     this.#showTop();
   }
 
