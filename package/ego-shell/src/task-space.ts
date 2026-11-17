@@ -52,9 +52,9 @@ export interface TaskTab extends RoutedTab {
 }
 
 /**
- * A task space: one window of tabs that all belong to one profile. Each kernel
- * supplies the window and the tabs; ownership and agent connections are the
- * same for all of them.
+ * A task space: a set of tabs that all belong to one profile. Each kernel
+ * supplies the tabs and how they are shown; ownership, agent connections and
+ * toolbar commands are the same for all of them.
  */
 export abstract class TaskSpace implements RoutedSpace {
   ownership: Owner;
