@@ -10,6 +10,41 @@ export type Owner = "agent" | "user";
  */
 export type ReportedOwnership = Owner | "agentDelegatedToUser";
 
+/** What the toolbar shows for a space. */
+export type SpaceState = {
+  spaceId: number;
+  name: string;
+  profileName: string;
+  proxy: string;
+  ownership: Owner;
+  agentState: string;
+  tabs: {
+    targetId: string;
+    title: string;
+    url: string;
+    active: boolean;
+    loading: boolean;
+  }[];
+  canGoBack: boolean;
+  canGoForward: boolean;
+};
+
+/** A toolbar button or the address bar, acting on one space. */
+export type ChromeCommand =
+  | { type: "newTab" }
+  | { type: "closeTab"; targetId: string }
+  | { type: "activateTab"; targetId: string }
+  | { type: "navigate"; url: string }
+  | { type: "back" | "forward" | "reload" | "takeControl" };
+
+/** What a person typed into the address bar, as a loadable URL. */
+export function typedUrl(input: string): string {
+  const text = input.trim();
+  if (/^([a-z][a-z0-9+.-]*:\/\/|about:|data:|file:)/i.test(text)) return text;
+  const local = /^(localhost|127\.|\[::1\])/i.test(text);
+  return `${local ? "http" : "https"}://${text}`;
+}
+
 export interface TaskTab extends RoutedTab {
   /** Out-of-process frames of this tab: frame id to CDP session id. */
   childFrames(): Map<string, string>;
