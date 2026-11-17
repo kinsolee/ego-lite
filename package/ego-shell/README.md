@@ -21,10 +21,17 @@ npm install
 npm start
 ```
 
-The window that opens manages the profiles: add or edit one, pick its kernel,
-and press Start. A running profile shows its task spaces and who controls each
-one. New window opens another window of the profile, and Stop closes all of
-them.
+Everything happens in one window. The sidebar lists the profiles: add or edit
+one, pick its kernel, and press Start. Under each running profile are its task
+spaces and who controls each one; pick one to show it on the right with its
+tabs, address bar and Take control button. New space opens another space of
+the profile, × closes one, and Stop closes all of them. A space an agent opens
+does not take the window from the space you are looking at; the sidebar marks
+it New, as it does a space an agent hands over to you.
+
+On macOS the close button only hides the window, and agents keep working in
+every space. Clicking the app in the Dock, or starting it again, shows the
+window. Quit the app to stop it. On other systems closing the window quits.
 
 Data lives in Electron's `userData` directory (`~/Library/Application
 Support/ego-shell` on macOS). Set `EGO_SHELL_USER_DATA` to use another
@@ -33,7 +40,7 @@ in plain text, readable only by the owner.
 
 ## Install the Apostate kernel
 
-The manager shows whether the kernel is installed. Install Apostate downloads
+The sidebar shows whether the kernel is installed. Install Apostate downloads
 `apostate-155.0.8059.31-macos-arm64.zip` (Apostate 0.5.1, about 160 MB) from
 the project's GitHub release; it is the only time the shell itself goes to
 the network. The archive's manifest from the same release must give the
@@ -41,7 +48,7 @@ SHA-256 that `src/kernel.ts` pins, and the archive must hash to it. It is
 extracted into `<userData>/kernels/155.0.8059.31/`, and its browser binary and
 framework must match the SHA-256 values pinned for them, before it replaces
 anything there. When a step fails, everything it wrote is deleted and the
-manager shows why.
+sidebar shows why.
 
 Extracting the archive into that directory by hand works as well. Before the
 first Apostate profile of a run starts, the shell checks the binary and its
@@ -75,16 +82,19 @@ The CLI reads `agent-endpoint.json` from the shell's `userData` directory. Set
 directory. When the variable is set, a shell that cannot be reached is an
 error. A browser that provides its own `globalThis.ego` is never replaced.
 
-A task space is one window bound to one profile. On the built-in kernel it is
-a shell window with a toolbar. On Apostate it is a window of the profile's
-Apostate process. On either kernel the spaces of one profile share cookies.
+A task space is a set of tabs bound to one profile. On the built-in kernel its
+tabs show in the main window, whether or not the space is selected there, so
+an agent can screenshot and click a space the user is not looking at. On
+Apostate a space is a window of the profile's Apostate process; selecting it
+in the sidebar brings that window forward. On either kernel the spaces of one
+profile share cookies.
 
-## Who controls a window
+## Who controls a task space
 
 `task.handOff()` gives a space to the user and pauses the agent's commands on
 it until `takeOverTaskSpace(id)`. On Apostate the user takes part by using the
-window itself. A window the user opens, from the manager or from the browser's
-own menu, becomes a task space the user owns, named after the profile. An
+window itself. A space the user opens, from the sidebar or from the Apostate
+browser's own menu, becomes a task space the user owns, named after the profile. An
 agent can take it over by id.
 
 ## How a profile's traffic reaches its proxy
@@ -142,7 +152,7 @@ screenshot.
 - `src/profile-queue.ts` runs each profile's start, update, release and erase
   one at a time, in call order. Both kernels use it.
 - `src/profile-runtime.ts`, `src/spaces.ts` and `src/tab.ts` are the built-in
-  kernel: one Electron session per profile, windows and tabs.
+  kernel: one Electron session per profile and its tabs.
   `src/profile-network.ts` switches a session's proxy, user agent and
   languages as one step and puts the old ones back when a step fails; it has
   no Electron import, so its tests run under plain Node.
@@ -156,7 +166,14 @@ screenshot.
 - `src/cdp-router.ts` gives each agent its own CDP sessions over a space's
   tabs, whichever kernel they belong to.
 - `src/snapshot.ts` renders the page snapshot the harness reads.
-- `ui/` is the profile manager and the toolbar of built-in windows.
+- `src/workbench.ts` owns the main window. Each space places its views
+  through a `Stage`; every view stays attached and sized to the content area,
+  and z-order alone decides which one the user sees. `src/selection.ts` holds
+  the rules for which space is selected. Neither imports Electron.
+- `ui/workbench.html` and `ui/workbench.js` are the main window's page: the
+  sidebar, the toolbar of the selected space and the profile editor. The page
+  reports where its content area is, so the layout lives only in
+  `ui/style.css`.
 
 ## Test
 
@@ -196,6 +213,12 @@ EGO_SHELL_APOSTATE_EXECUTABLE=<path to Chromium.app>/Contents/MacOS/Chromium npm
 - Apostate: editing a running profile's proxy, seed, locale or timezone
   stops its process and closes its windows; it starts with the new settings
   the next time it is started or a task space is opened on it.
+- Built-in kernel: Chromium hit-tests input against the last frame a page
+  drew, and a page in an unselected space or a hidden window may not draw
+  after it navigates. A frame in another process, such as a payment iframe,
+  has no size until its parent draws. When any frame of a tab finishes
+  loading, and before the first click, wheel, touch or drag on a new
+  document, the shell captures one pixel of the tab, which makes it draw.
 - Apostate: Chromium does not announce a tab the user picks in the tab
   strip, so the shell asks each tab of the window whether it is visible when
   an agent lists tabs or takes a snapshot. While the window is minimised, no

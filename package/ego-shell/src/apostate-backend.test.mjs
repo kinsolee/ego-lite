@@ -42,6 +42,7 @@ async function setup(t, options = {}) {
     add: (space) => spaces.set(space.id, space),
     remove: (space) => spaces.delete(space.id),
     changed() {},
+    stageFor: () => ({ place() {}, remove() {}, front() {}, onSelected() {} }),
   };
   const backend = new ApostateBackend({
     dataDir,

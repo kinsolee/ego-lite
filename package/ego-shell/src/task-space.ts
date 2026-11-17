@@ -1,5 +1,6 @@
 import { CdpClient, type RoutedSpace, type RoutedTab } from "./cdp-router.js";
 import type { Kernel, Profile } from "./profile-store.js";
+import type { Stage, Stages } from "./workbench.js";
 
 export type Owner = "agent" | "user";
 
@@ -10,15 +11,50 @@ export type Owner = "agent" | "user";
  */
 export type ReportedOwnership = Owner | "agentDelegatedToUser";
 
+/** What the toolbar shows for a space. */
+export type SpaceState = {
+  spaceId: number;
+  name: string;
+  profileName: string;
+  proxy: string;
+  ownership: Owner;
+  agentState: string;
+  tabs: {
+    targetId: string;
+    title: string;
+    url: string;
+    active: boolean;
+    loading: boolean;
+  }[];
+  canGoBack: boolean;
+  canGoForward: boolean;
+};
+
+/** A toolbar button or the address bar, acting on one space. */
+export type ChromeCommand =
+  | { type: "newTab" }
+  | { type: "closeTab"; targetId: string }
+  | { type: "activateTab"; targetId: string }
+  | { type: "navigate"; url: string }
+  | { type: "back" | "forward" | "reload" | "takeControl" };
+
+/** What a person typed into the address bar, as a loadable URL. */
+export function typedUrl(input: string): string {
+  const text = input.trim();
+  if (/^([a-z][a-z0-9+.-]*:\/\/|about:|data:|file:)/i.test(text)) return text;
+  const local = /^(localhost|127\.|\[::1\])/i.test(text);
+  return `${local ? "http" : "https"}://${text}`;
+}
+
 export interface TaskTab extends RoutedTab {
   /** Out-of-process frames of this tab: frame id to CDP session id. */
   childFrames(): Map<string, string>;
 }
 
 /**
- * A task space: one window of tabs that all belong to one profile. Each kernel
- * supplies the window and the tabs; ownership and agent connections are the
- * same for all of them.
+ * A task space: a set of tabs that all belong to one profile. Each kernel
+ * supplies the tabs and how they are shown; ownership, agent connections and
+ * toolbar commands are the same for all of them.
  */
 export abstract class TaskSpace implements RoutedSpace {
   ownership: Owner;
@@ -47,7 +83,42 @@ export abstract class TaskSpace implements RoutedSpace {
   ): Promise<unknown>;
   /** Show the user where the agent is about to act, in viewport CSS pixels. */
   abstract highlightMouse(x: number, y: number): Promise<void>;
+  /** End the space: close its tabs and leave the host. Idempotent; the only way a space ends. */
   abstract close(): Promise<void>;
+  abstract state(): SpaceState;
+  /** Load a URL in the active tab. */
+  protected abstract navigate(url: string): Promise<void>;
+  protected abstract back(): Promise<void>;
+  protected abstract forward(): Promise<void>;
+  protected abstract reload(): Promise<void>;
+
+  async command(command: ChromeCommand): Promise<void> {
+    switch (command.type) {
+      case "newTab":
+        await this.createTab("about:blank");
+        return;
+      case "closeTab":
+        return this.closeTab(command.targetId);
+      case "activateTab":
+        return this.activateTab(command.targetId);
+      case "navigate": {
+        const url = typedUrl(command.url);
+        if (this.activeTab()) await this.navigate(url);
+        else await this.createTab(url);
+        return;
+      }
+      case "back":
+        return this.back();
+      case "forward":
+        return this.forward();
+      case "reload":
+        return this.reload();
+      case "takeControl":
+        this.setOwnership("user");
+        return;
+    }
+  }
+
   /** Bring titles and URLs up to date when the kernel does not announce them. */
   async refreshTabs(): Promise<void> {}
   /** Follow a tab the user switched to when the kernel does not announce it. */
@@ -106,7 +177,7 @@ export abstract class TaskSpace implements RoutedSpace {
 }
 
 /** Where a kernel registers the spaces it opens, whoever asked for them. */
-export interface SpaceHost {
+export interface SpaceHost extends Stages {
   allocateId(): number;
   add(space: TaskSpace): void;
   remove(space: TaskSpace): void;
@@ -132,10 +203,12 @@ export class TaskSpaces implements SpaceHost {
   readonly #spaces = new Map<number, TaskSpace>();
   readonly #backends = new Map<Kernel, KernelBackend>();
   readonly #onChange: () => void;
+  readonly #stages: Stages;
   #nextId = 1;
 
-  constructor(onChange: () => void) {
+  constructor(onChange: () => void, stages: Stages) {
     this.#onChange = onChange;
+    this.#stages = stages;
   }
 
   register(kernel: Kernel, backend: KernelBackend): void {
@@ -198,6 +271,11 @@ export class TaskSpaces implements SpaceHost {
 
   allocateId(): number {
     return this.#nextId++;
+  }
+
+  /** The space's place in the main window, for the kernel that opens it. */
+  stageFor(spaceId: number): Stage {
+    return this.#stages.stageFor(spaceId);
   }
 
   add(space: TaskSpace): void {

@@ -54,26 +54,74 @@ select {
   min-height: 1.4em;
 }
 
-/* Manager window */
-.manager {
-  display: grid;
-  grid-template-columns: 1fr 340px;
-  gap: 24px;
-  padding: 20px;
+[hidden] {
+  display: none !important;
 }
-.manager h1 {
+
+.workbench {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  height: 100vh;
+  overflow: hidden;
+}
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-right: 1px solid var(--line);
+  overflow: hidden auto;
+}
+.sidebar header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.sidebar h1,
+.editor h1 {
   font-size: 16px;
-  margin: 0 0 12px;
+  margin: 0;
+}
+.main {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-width: 0;
+  min-height: 0;
+}
+.stage {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+}
+.stage .empty {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+}
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, CanvasText 30%, transparent);
+}
+.editor {
+  width: 380px;
+  max-height: 90vh;
+  overflow: auto;
+  padding: 20px;
+  border-radius: 10px;
+  background: Canvas;
 }
 .profiles {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   align-content: start;
 }
 .profile {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 4px 12px;
+  gap: 6px;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -81,17 +129,49 @@ select {
 .profile .name {
   font-weight: 600;
 }
-.profile .details {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-.profile .status,
-.profile .space {
+.profile .head {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 2px;
+}
+.profile .head .name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spaces {
+  display: grid;
+  gap: 2px;
+}
+.space {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.space:hover {
+  background: color-mix(in srgb, CanvasText 6%, Canvas);
+}
+.space.selected {
+  background: color-mix(in srgb, var(--accent) 16%, Canvas);
+}
+.space .title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.space .close {
+  border: 0;
+  padding: 0 4px;
+  background: none;
+}
+.badge.unseen {
+  border-color: #d97706;
+  color: #d97706;
 }
 .badge.running {
   border-color: #16a34a;
@@ -100,7 +180,7 @@ select {
 .profile .actions {
   display: flex;
   gap: 6px;
-  align-items: start;
+  flex-wrap: wrap;
 }
 form {
   display: grid;
@@ -121,7 +201,9 @@ form .buttons {
   gap: 8px;
 }
 
-/* Task space toolbar: its height must match TOOLBAR_HEIGHT in src/spaces.ts */
+.chrome.idle > * {
+  visibility: hidden;
+}
 .chrome {
   height: 84px;
   display: grid;
@@ -195,5 +277,5 @@ form .buttons {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: auto;
 }

@@ -2,12 +2,15 @@ import { CdpConnection, type CdpEvent } from "./browser-cdp.js";
 import { type ChildTarget, type TargetInfo } from "./cdp-router.js";
 import { MouseHighlight } from "./mouse-highlight.js";
 import type { Profile } from "./profile-store.js";
+import { describeProxy } from "./proxy-config.js";
 import {
   TaskSpace,
   type Owner,
   type SpaceHost,
+  type SpaceState,
   type TaskTab,
 } from "./task-space.js";
+import type { Stage } from "./workbench.js";
 
 /**
  * Announces a tab's out-of-process frames. Nothing starts paused: the kernel
@@ -202,14 +205,22 @@ export class ApostateSpace extends TaskSpace {
   readonly #tabs: ApostateTab[] = [];
   #active: ApostateTab | undefined;
 
+  /** Until the main window can show it, the space lives in its own Apostate window. */
   constructor(
     id: number,
     name: string,
     createdBy: Owner,
     browser: ApostateBrowser,
+    stage: Stage,
   ) {
     super(id, name, createdBy);
     this.#browser = browser;
+    stage.front(null);
+    stage.onSelected((selected) => {
+      if (selected && this.#active) {
+        this.#browser.activate(this.#active).catch(() => {});
+      }
+    });
   }
 
   get profile(): Profile {
@@ -278,6 +289,52 @@ export class ApostateSpace extends TaskSpace {
 
   close(): Promise<void> {
     return this.#browser.closeSpace(this);
+  }
+
+  /** Chromium does not say where a tab is in its history without being asked, so the arrows stay off. */
+  state(): SpaceState {
+    return {
+      spaceId: this.id,
+      name: this.name,
+      profileName: this.profile.name,
+      proxy: describeProxy(this.profile.proxy),
+      ownership: this.ownership,
+      agentState: this.agentState,
+      tabs: this.#tabs.map((tab) => {
+        const { targetId, title, url } = tab.targetInfo();
+        return { targetId, title, url, active: tab === this.#active, loading: false };
+      }),
+      canGoBack: false,
+      canGoForward: false,
+    };
+  }
+
+  protected async navigate(url: string): Promise<void> {
+    await this.#active?.sendOwn("Page.navigate", { url });
+  }
+
+  protected back(): Promise<void> {
+    return this.#step(-1);
+  }
+
+  protected forward(): Promise<void> {
+    return this.#step(1);
+  }
+
+  protected async reload(): Promise<void> {
+    await this.#active?.sendOwn("Page.reload");
+  }
+
+  async #step(offset: number): Promise<void> {
+    const tab = this.#active;
+    if (!tab) return;
+    const { currentIndex, entries } = (await tab.sendOwn(
+      "Page.getNavigationHistory",
+    )) as { currentIndex: number; entries: { id: number }[] };
+    const entry = entries[currentIndex + offset];
+    if (entry) {
+      await tab.sendOwn("Page.navigateToHistoryEntry", { entryId: entry.id });
+    }
   }
 
   override setOwnership(owner: Owner): void {
@@ -393,11 +450,13 @@ export class ApostateBrowser {
   /** Open a new window and make it a task space. */
   createSpace(name: string, createdBy: Owner): Promise<ApostateSpace> {
     return this.#serial(async () => {
+      const id = this.#host.allocateId();
       const space = new ApostateSpace(
-        this.#host.allocateId(),
+        id,
         name,
         createdBy,
         this,
+        this.#host.stageFor(id),
       );
       await this.#open({ url: "about:blank", newWindow: true }, () => space);
       this.#host.add(space);
@@ -531,11 +590,13 @@ export class ApostateBrowser {
 
   /** A window nobody asked the shell for is the user's own task space. */
   #adoptWindow(): ApostateSpace {
+    const id = this.#host.allocateId();
     const space = new ApostateSpace(
-      this.#host.allocateId(),
+      id,
       this.profile.name,
       "user",
       this,
+      this.#host.stageFor(id),
     );
     this.#host.add(space);
     return space;
