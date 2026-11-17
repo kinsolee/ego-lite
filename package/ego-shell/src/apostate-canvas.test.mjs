@@ -61,8 +61,9 @@ test(
       seed: "111",
       locale: "pt-BR",
       timezone: "America/Sao_Paulo",
+      headless: true,
     });
-    const kernel = spawn(KERNEL, [...args, "--headless=new"], {
+    const kernel = spawn(KERNEL, args, {
       stdio: ["ignore", "ignore", "pipe"],
     });
     const exited = new Promise((resolve) => kernel.once("exit", resolve));
