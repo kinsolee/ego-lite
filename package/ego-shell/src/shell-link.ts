@@ -63,12 +63,16 @@ const SELECTED_TEXT = `(() => {
     let inner = null;
     try { inner = active && active.tagName === "IFRAME" ? active.contentDocument : null; } catch {}
     if (inner) { doc = inner; continue; }
-    // Chrome copies nothing out of a password field.
+    if (active && active.shadowRoot && active.shadowRoot.activeElement) { doc = active.shadowRoot; continue; }
+    // Chrome copies nothing out of a password field. One in a closed shadow
+    // root cannot be reached, but its selection reads as mask characters.
     if (active && active.type === "password") return "";
+    const selected = String(doc.getSelection ? doc.getSelection() ?? "" : getSelection() ?? "");
+    if (/^\u2022+$/.test(selected)) return "";
     if (active && typeof active.value === "string" && typeof active.selectionStart === "number") {
       return active.value.slice(active.selectionStart, active.selectionEnd);
     }
-    return String(doc.getSelection() ?? "");
+    return selected;
   }
 })()`;
 
@@ -248,13 +252,24 @@ export class ShellLink {
 
   /** Put host text on the kernel's clipboard, ahead of a Cmd+V. */
   async putClipboard(targetId: string, text: string): Promise<void> {
-    const { session, frameId } = await this.#focusedFrame(targetId);
-    await this.#evaluate(
-      session,
-      `navigator.clipboard.writeText(${JSON.stringify(text)}).then(() => "ok")`,
-      { userGesture: true, awaitPromise: true },
-      frameId,
-    );
+    // The clipboard is the browser's, so any frame may write it; a frame whose
+    // policy forbids it, such as a cross-origin iframe, hands over to the next.
+    const { focused, frames } = await this.#frames(targetId);
+    let refusal: unknown = new Error("The page has no frame");
+    for (const { session, frameId } of [focused, ...frames.filter((frame) => frame !== focused)]) {
+      try {
+        await this.#evaluate(
+          session,
+          `navigator.clipboard.writeText(${JSON.stringify(text)}).then(() => "ok")`,
+          { userGesture: true, awaitPromise: true },
+          frameId,
+        );
+        return;
+      } catch (error) {
+        refusal = error;
+      }
+    }
+    throw refusal;
   }
 
   /**
@@ -479,6 +494,11 @@ export class ShellLink {
    * of every session are asked, not only out-of-process ones.
    */
   async #focusedFrame(targetId: string): Promise<FrameRef> {
+    return (await this.#frames(targetId)).focused;
+  }
+
+  /** Every frame of the page, top first, and the one with focus. */
+  async #frames(targetId: string): Promise<{ focused: FrameRef; frames: FrameRef[] }> {
     const page = await this.#page(targetId);
     const frames = (
       await Promise.all(
@@ -492,7 +512,11 @@ export class ShellLink {
         this.#evaluate(frame.session, "document.hasFocus()", {}, frame.frameId).catch(() => false),
       ),
     );
-    return frames.findLast((_, index) => focused[index] === true) ?? { session: page.id };
+    const top: FrameRef = { session: page.id };
+    return {
+      focused: frames.findLast((_, index) => focused[index] === true) ?? top,
+      frames: frames.length > 0 ? frames : [top],
+    };
   }
 
   async #isolatedWorld(sessionId: ShellSessionId, frameId?: string): Promise<number> {

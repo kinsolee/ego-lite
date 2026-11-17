@@ -296,8 +296,20 @@ export class Screen {
           return { method, params: rest };
         }) satisfies InputCall[];
       } else if (this.#kernelClipboard.get(link) !== text) {
-        await link.putClipboard(targetId, text).catch(() => {});
-        this.#kernelClipboard.set(link, text);
+        try {
+          await link.putClipboard(targetId, text);
+          this.#kernelClipboard.set(link, text);
+        } catch {
+          // No frame of the page may write the clipboard (Permissions-Policy),
+          // so the kernel still holds older text: type the host's instead.
+          calls = [
+            ...calls.map(({ method, params }) => {
+              const { commands: _, ...rest } = params;
+              return { method, params: rest };
+            }),
+            { method: "Input.insertText", params: { text } },
+          ] satisfies InputCall[];
+        }
       }
     }
     if (!live()) return;

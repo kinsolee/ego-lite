@@ -92,3 +92,27 @@ test("Cmd+V with no text on the host pastes nothing from the kernel clipboard", 
   assert.ok(log.includes("A:rawKeyDown"), "the keys still reach the page");
   assert.ok(!log.some((e) => e.endsWith("+paste")), "without the paste command");
 });
+
+test("Cmd+V where the page may not write the clipboard types the host's text instead of pasting the kernel's older one", async () => {
+  const log = [];
+  const link = new Link("A", log);
+  let refuse = true;
+  link.putClipboard = async (targetId, text) => {
+    log.push(`A:put ${text}`);
+    if (refuse) throw new Error("NotAllowedError");
+  };
+  link.dispatch = async (targetId, calls) => {
+    for (const call of calls) log.push(`A:${call.params.type ?? call.method}${call.params.text ? " " + call.params.text : ""}${call.params.commands ? "+" + call.params.commands : ""}`);
+  };
+  const port = new Port();
+  const screen = await shown(port, src(1, link));
+  port.clipboard = "NEW";
+  screen.receive(key("down", "KeyV", "v", 86, 4));
+  await delay(10);
+  assert.deepEqual(log, ["A:put NEW", "A:rawKeyDown", "A:Input.insertText NEW"]);
+  log.length = 0;
+  refuse = false;
+  screen.receive(key("down", "KeyV", "v", 86, 4));
+  await delay(10);
+  assert.deepEqual(log, ["A:put NEW", "A:rawKeyDown+paste"], "a refused write is not remembered as done");
+});
