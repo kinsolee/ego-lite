@@ -50,6 +50,8 @@ export class Tab implements RoutedTab {
   /** Sessions of workers and other children agents are not told about. */
   readonly #unannounced = new Set<string>();
   #overrides: TabOverrides;
+  /** A document committed and has not been drawn yet, so it cannot be hit-tested. */
+  #undrawn = true;
   readonly #highlight = new MouseHighlight({
     attach: async () => {
       const { sessionId } = await this.webContents.debugger.sendCommand(
@@ -161,7 +163,12 @@ export class Tab implements RoutedTab {
     if (!contents.debugger.isAttached()) await this.#attach();
     // The highlight is drawn by the browser and would appear in the capture.
     if (method === "Page.captureScreenshot") await this.#highlight.hide();
-    return contents.debugger.sendCommand(method, params, sessionId);
+    if (!sessionId && this.#undrawn && startsGesture(method, params)) {
+      await this.#draw();
+    }
+    const result = await contents.debugger.sendCommand(method, params, sessionId);
+    if (!sessionId && method === "Page.captureScreenshot") this.#undrawn = false;
+    return result;
   }
 
   /** Show where the agent is about to act, in viewport CSS pixels. */
@@ -224,10 +231,27 @@ export class Tab implements RoutedTab {
         this.#events.changed(this),
       );
     }
+    contents.on("did-frame-navigate", () => {
+      this.#undrawn = true;
+    });
     contents.once("destroyed", () => this.#events.destroyed(this));
     await this.#attach();
     const { targetInfo } = await this.send("Target.getTargetInfo");
     this.targetId = targetInfo.targetId;
+  }
+
+  /**
+   * Chromium drops input aimed at a document that has no frame yet, and a tab
+   * that is not on top of the window, or whose window is hidden, may never get
+   * one. Capturing a pixel makes the renderer draw.
+   */
+  async #draw(): Promise<void> {
+    await this.webContents.debugger.sendCommand("Page.captureScreenshot", {
+      format: "jpeg",
+      quality: 1,
+      clip: { x: 0, y: 0, width: 1, height: 1, scale: 1 },
+    });
+    this.#undrawn = false;
   }
 
   async #attach(): Promise<void> {
@@ -305,5 +329,19 @@ export class Tab implements RoutedTab {
     for (const child of this.#children.values()) {
       if (child.parentSessionId === sessionId) this.#forget(child.sessionId);
     }
+  }
+}
+
+/** Input that Chromium hit-tests against the last drawn frame. */
+function startsGesture(method: string, params: Record<string, unknown>): boolean {
+  switch (method) {
+    case "Input.dispatchMouseEvent":
+      return params.type === "mousePressed" || params.type === "mouseWheel";
+    case "Input.dispatchTouchEvent":
+      return params.type === "touchStart";
+    case "Input.dispatchDragEvent":
+      return params.type === "dragEnter";
+    default:
+      return false;
   }
 }

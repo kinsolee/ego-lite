@@ -213,10 +213,10 @@ EGO_SHELL_APOSTATE_EXECUTABLE=<path to Chromium.app>/Contents/MacOS/Chromium npm
 - Apostate: editing a running profile's proxy, seed, locale or timezone
   stops its process and closes its windows; it starts with the new settings
   the next time it is started or a task space is opened on it.
-- Built-in kernel: while the main window is hidden or minimised, Chromium
-  draws no frames for it. A click that comes right after a page loads is then
-  lost, although the harness reports it done; a screenshot first makes it
-  land. Keep the window shown while agents click.
+- Built-in kernel: Chromium hit-tests input against the last frame a page
+  drew, and a page in an unselected space or a hidden window may not draw
+  after it navigates. Before the first click, wheel, touch or drag on a newly
+  loaded document the shell captures one pixel of it, which makes it draw.
 - Apostate: Chromium does not announce a tab the user picks in the tab
   strip, so the shell asks each tab of the window whether it is visible when
   an agent lists tabs or takes a snapshot. While the window is minimised, no
