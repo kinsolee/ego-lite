@@ -30,7 +30,7 @@ export interface Stage<V = unknown> {
   place(view: V): void;
   /** Detach a view whose tab closed. */
   remove(view: V): void;
-  /** The view to show while this space is selected; null shows the UI page. */
+  /** The view to show while this space is selected, one it placed or a shared one; null shows the UI page. */
   front(view: V | null): void;
   /** Told true when the space is selected or picked again, false when it stops being selected. */
   onSelected(listener: (selected: boolean) => void): void;
@@ -96,6 +96,7 @@ export class Workbench<V> implements Stages<V> {
   readonly #spaces: SpaceList;
   readonly #push: (state: WorkbenchState) => void;
   readonly #slots = new Map<SpaceId, Slot<V>>();
+  readonly #shared: ReadonlySet<V>;
   #selection: Selection = EMPTY_SELECTION;
   #rect: ContentRect | null = null;
   #covered = false;
@@ -108,11 +109,23 @@ export class Workbench<V> implements Stages<V> {
     ui: V;
     spaces: SpaceList;
     push: (state: WorkbenchState) => void;
+    /**
+     * Views any space may show, attached for the window's whole life: the
+     * screen view every Apostate space is drawn into.
+     */
+    shared?: readonly V[];
   }) {
     this.#window = options.window;
     this.#ui = options.ui;
     this.#spaces = options.spaces;
     this.#push = options.push;
+    this.#shared = new Set(options.shared ?? []);
+    for (const view of this.#shared) {
+      this.#window.add(view);
+      this.#window.setBounds(view, this.#contentRect());
+    }
+    this.#window.raise(this.#ui);
+    this.#top = this.#ui;
   }
 
   stageFor(spaceId: SpaceId): Stage<V> {
@@ -140,7 +153,9 @@ export class Workbench<V> implements Stages<V> {
       },
       front: (view) => {
         if (!live.alive) return;
-        if (view !== null && !live.views.has(view)) return;
+        if (view !== null && !live.views.has(view) && !this.#shared.has(view)) {
+          return;
+        }
         live.front = view;
         this.#showTop();
       },
@@ -180,6 +195,7 @@ export class Workbench<V> implements Stages<V> {
   layout(report: LayoutReport): void {
     this.#rect = report.rect;
     this.#covered = report.covered;
+    for (const view of this.#shared) this.#window.setBounds(view, report.rect);
     for (const slot of this.#slots.values()) {
       for (const view of slot.views) this.#window.setBounds(view, report.rect);
     }
