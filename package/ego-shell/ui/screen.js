@@ -20,6 +20,11 @@ const modifiers = (event) =>
   (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0);
 const held = (buttons) => (buttons & 1 ? "left" : buttons & 4 ? "middle" : buttons & 2 ? "right" : "none");
 const at = (event) => ({ x: event.clientX, y: event.clientY });
+/** Every input but a composition update goes out here, after any held update. */
+const send = (payload) => {
+  releaseUpdate();
+  bridge.input(payload);
+};
 
 function reportSize() {
   const dpr = window.devicePixelRatio;
@@ -64,7 +69,7 @@ bridge.onStatus((status) => {
 });
 
 function mouse(type, event) {
-  bridge.input({
+  send({
     kind: "mouse",
     type,
     at: at(event),
@@ -97,7 +102,7 @@ canvas.addEventListener(
   (event) => {
     event.preventDefault();
     const scale = event.deltaMode === 1 ? LINE_PIXELS : 1;
-    bridge.input({
+    send({
       kind: "wheel",
       at: at(event),
       deltaX: event.deltaX * scale,
@@ -109,7 +114,7 @@ canvas.addEventListener(
 );
 
 function key(type, event) {
-  bridge.input({
+  send({
     kind: "key",
     type,
     key: event.key,
@@ -127,16 +132,29 @@ ime.addEventListener("keydown", (event) => {
   if (event.keyCode !== 229) event.preventDefault();
 });
 ime.addEventListener("keyup", (event) => key("up", event));
+// Committing fires one last compositionupdate in the same task as
+// compositionend; the commit already carries that text, so an update is held
+// until its task ends and dropped if the composition ended meanwhile.
+let heldUpdate = null;
+const releaseUpdate = () => {
+  if (!heldUpdate) return;
+  const update = heldUpdate;
+  heldUpdate = null;
+  bridge.input(update);
+};
 ime.addEventListener("compositionupdate", (event) => {
-  bridge.input({
+  releaseUpdate();
+  heldUpdate = {
     kind: "composition",
     phase: "update",
     text: event.data,
     selectionStart: event.data.length,
     selectionEnd: event.data.length,
-  });
+  };
+  setTimeout(releaseUpdate, 0);
 });
 ime.addEventListener("compositionend", (event) => {
+  heldUpdate = null;
   bridge.input({ kind: "composition", phase: "commit", text: event.data });
   ime.value = "";
 });
@@ -144,7 +162,7 @@ ime.addEventListener("compositionend", (event) => {
 ime.addEventListener("input", (event) => {
   if (event.isComposing) return;
   if (event.inputType === "insertText" && event.data) {
-    bridge.input({ kind: "composition", phase: "commit", text: event.data });
+    send({ kind: "composition", phase: "commit", text: event.data });
   }
   ime.value = "";
 });
