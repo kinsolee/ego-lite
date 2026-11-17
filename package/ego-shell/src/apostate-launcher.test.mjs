@@ -70,6 +70,22 @@ test("a profile's seed, locale and timezone reach the kernel", async (t) => {
   assert.ok(!launch.argv.some((arg) => arg.startsWith("--proxy-server")));
 });
 
+test("every kernel reports the persona's single 60 Hz screen, never the host's", () => {
+  const args = apostateArguments(launchOptions("/data/profile"));
+  assert.ok(args.includes("--fingerprint-screen-width=1920"));
+  assert.ok(args.includes("--fingerprint-screen-height=1080"));
+  for (const leak of ["--screen-info", "--disable-frame-rate-limit", "--disable-gpu-vsync"]) {
+    assert.ok(!args.some((arg) => arg.startsWith(leak)), leak);
+  }
+  assert.ok(!args.includes("--headless=new"), "a kernel opens windows unless asked not to");
+});
+
+test("a headless kernel opens its windows at the persona's window size", () => {
+  const args = apostateArguments(launchOptions("/data/profile", { headless: true }));
+  assert.ok(args.includes("--headless=new"));
+  assert.ok(args.includes("--window-size=1440,900"));
+});
+
 test("a proxied profile only ever names the loopback relay", () => {
   const args = apostateArguments(
     launchOptions("/data/profile", { proxyPort: 41234 }),

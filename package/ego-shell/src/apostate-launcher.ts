@@ -11,6 +11,8 @@ export type KernelLaunch = {
   timezone: string;
   /** Port of the profile's relay on 127.0.0.1; absent for a direct profile. */
   proxyPort?: number;
+  /** No native windows: the shell shows the pages by screencast. */
+  headless?: boolean;
   env?: NodeJS.ProcessEnv;
   startTimeoutMs?: number;
   stopTimeoutMs?: number;
@@ -31,6 +33,16 @@ export class KernelLaunchError extends Error {
     this.name = "KernelLaunchError";
   }
 }
+
+/**
+ * The machine every profile claims to be: one 60 Hz 1920x1080 display, which a
+ * headless kernel can match. Without the screen flags a page reads the host's
+ * own display, the same for every profile.
+ */
+export const PERSONA = {
+  screen: { width: 1920, height: 1080 },
+  window: { width: 1440, height: 900 },
+} as const;
 
 const PORT_FILE = "DevToolsActivePort";
 const LOCK_FILE = "SingletonLock";
@@ -54,7 +66,15 @@ export function apostateArguments(launch: KernelLaunch): string[] {
     `--fingerprint-locale=${launch.locale}`,
     `--fingerprint-timezone=${launch.timezone}`,
     "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    `--fingerprint-screen-width=${PERSONA.screen.width}`,
+    `--fingerprint-screen-height=${PERSONA.screen.height}`,
   ];
+  if (launch.headless) {
+    args.push(
+      "--headless=new",
+      `--window-size=${PERSONA.window.width},${PERSONA.window.height}`,
+    );
+  }
   if (launch.proxyPort !== undefined) {
     args.push(
       `--proxy-server=socks5://127.0.0.1:${launch.proxyPort}`,
