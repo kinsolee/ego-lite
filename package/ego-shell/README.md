@@ -194,6 +194,50 @@ page writes read back unchanged:
 EGO_SHELL_APOSTATE_EXECUTABLE=<path to Chromium.app>/Contents/MacOS/Chromium npm test
 ```
 
+### Headless parity
+
+A shop profile runs its kernel with `--headless=new`, and the person sees it
+through a screencast. `test-support/parity/run.mjs` checks that a page cannot
+tell this from a kernel with a window. It plays one scripted human session
+twice, once headful and once headless, through CDP `Input.*` on a session of
+its own, the way the shell forwards input. It then compares everything the
+page recorded:
+
+```sh
+npm run build
+node test-support/parity/run.mjs            # --kernel <Chromium> --raw <file>
+```
+
+The kernel defaults to `EGO_SHELL_APOSTATE_EXECUTABLE`, else the probe cache's
+155.0.8059.31 build. The JSON verdict goes to stdout and a summary to stderr.
+The exit code is 0 only when there are no diffs, both canvas round trips read
+back unchanged, and the session reached its expected end in both modes. It is
+1 for a failed check, and 2 when the run proves nothing. That covers a harness
+error, a host pasteboard that did not restore, and a disturbed run: the
+headful window lost focus or was moved while the run was going.
+
+- The fixture is a page on `127.0.0.1` with a cross-origin iframe on a second
+  port. `observer.js` records, with page APIs only, screen and window
+  geometry, media queries, focus and visibility, navigator and Client Hints,
+  permissions, fonts, frame rate and timer resolution, and every input event
+  with its coordinates, buttons, keys, composition data and timing. The
+  server also records request headers.
+- `session.mjs` lists the steps: a mouse path and click, a double click, a
+  right click, wheel, ASCII and Portuguese typing (ABNT2 dead keys as
+  composition), Chinese IME composition, Cmd+A/C/V/X with editing
+  `commands`, Tab, and the `<select>` route (`DOM.focus`, then the first
+  letter). It plays them in the top page and again in the iframe.
+- `diff.mjs` compares every value as recorded, except the ones in its
+  `NORMALISATIONS` list. The verdict prints that list.
+  `document.hasFocus()` is reported under `knownLimits`, not `diffs`.
+- The clipboard steps write to the host pasteboard while a window is up. The
+  run saves every item and type first, restores them at the end, and reads
+  the pasteboard back to confirm it matches. A backup that does not match is
+  kept, and its path is printed.
+
+A window opens on screen for about a minute. Do not use the mouse or keyboard,
+and do not switch apps, until the run ends.
+
 ## Known limits
 
 - Proxy passwords are stored in plain text in `profiles.json`.
