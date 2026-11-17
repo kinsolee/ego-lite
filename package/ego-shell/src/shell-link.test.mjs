@@ -189,6 +189,56 @@ test("while the user holds a tab, its dialogs and file choosers are answered thr
   assert.deepEqual(chromium.sent(session, "Page.setInterceptFileChooserDialog").map((call) => call.params.enabled), [true, false]);
 });
 
+test("a dialog already open when the user takes the tab is put to the user", async (t) => {
+  const { chromium, link, page } = await setup(t);
+  await link.answerFor(page, null);
+  chromium.dialog(page, { type: "confirm", message: "Sair?" });
+  await delay(10);
+  const asked = [];
+  await link.answerFor(page, async (prompt) => {
+    asked.push(prompt);
+    return { kind: "dialog", accept: true };
+  });
+  const [session] = chromium.sessionsOf(page);
+  await until(() => chromium.sent(session, "Page.handleJavaScriptDialog").length === 1, "the answer");
+  assert.deepEqual(asked, [{ kind: "dialog", type: "confirm", message: "Sair?", defaultPrompt: "" }]);
+});
+
+test("a dialog the user left unanswered when an agent took over is asked again when the user takes back", async (t) => {
+  const { chromium, link, page } = await setup(t);
+  const first = [];
+  await link.answerFor(page, (prompt) => {
+    first.push(prompt);
+    return new Promise(() => {});
+  });
+  chromium.dialog(page, { type: "alert", message: "Olá do site" });
+  await until(() => first.length === 1, "the first ask");
+  await link.answerFor(page, null);
+  const second = [];
+  await link.answerFor(page, async (prompt) => {
+    second.push(prompt);
+    return { kind: "dialog", accept: true };
+  });
+  const [session] = chromium.sessionsOf(page);
+  await until(() => chromium.sent(session, "Page.handleJavaScriptDialog").length === 1, "the answer");
+  assert.equal(second.length, 1);
+});
+
+test("a dialog someone else answered is not asked again", async (t) => {
+  const { chromium, link, page } = await setup(t);
+  await link.answerFor(page, null);
+  chromium.dialog(page, { type: "alert", message: "x" });
+  chromium.dialogClosed(page);
+  await delay(10);
+  const asked = [];
+  await link.answerFor(page, async (prompt) => {
+    asked.push(prompt);
+    return { kind: "dialog", accept: true };
+  });
+  await delay(20);
+  assert.deepEqual(asked, []);
+});
+
 test("a cancelled file chooser sets no files", async (t) => {
   const { chromium, link, page } = await setup(t);
   await link.answerFor(page, async () => ({ kind: "files", paths: [] }));

@@ -62,6 +62,14 @@ export async function startFakeBrowser({ hang = [] } = {}) {
     return windowId;
   }
 
+  function closeDialog(targetId, params) {
+    for (const [id, session] of sessions) {
+      if (session.targetId === targetId && session.pageEnabled) {
+        sessionEvent(id, "Page.javascriptDialogClosed", { result: Boolean(params.accept), userInput: params.promptText ?? "" });
+      }
+    }
+  }
+
   function addTarget({ url = "about:blank", windowId, openerId, type, subtype }) {
     const targetId = `T${++counter}`;
     const info = {
@@ -211,6 +219,9 @@ export async function startFakeBrowser({ hang = [] } = {}) {
       case "Page.disable":
         session.pageEnabled = false;
         return {};
+      case "Page.handleJavaScriptDialog":
+        closeDialog(targetId, params);
+        return {};
       case "Page.setInterceptFileChooserDialog":
         session.interceptFiles = Boolean(params.enabled);
         return {};
@@ -311,6 +322,7 @@ export async function startFakeBrowser({ hang = [] } = {}) {
     openPage(options = {}) {
       const windowId =
         options.windowId ?? (options.newWindow ? addWindow() : activeWindow);
+      if (options.bounds) Object.assign(windows.get(windowId), options.bounds);
       return addTarget({ ...options, windowId });
     },
     closePage: removeTarget,
@@ -359,6 +371,8 @@ export async function startFakeBrowser({ hang = [] } = {}) {
     },
     /** What lies under a page point of a target: `(x, y) => nodeName`. */
     hits,
+    /** Another client, such as an agent, answered the page's dialog. */
+    dialogClosed: (targetId) => closeDialog(targetId, { accept: true }),
     /** The page opens a JS dialog: every session with Page enabled hears it. */
     dialog(targetId, params) {
       for (const [sessionId, session] of sessions) {

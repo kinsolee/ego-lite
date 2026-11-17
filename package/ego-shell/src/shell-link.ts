@@ -45,7 +45,11 @@ type PageSession = {
   /** Out-of-process frames below the page, in the order they attached. */
   frames: ShellSessionId[];
   answering: Listener | undefined;
+  /** The JS dialog open in the page now; Chromium announces one only as it opens. */
+  dialog: DialogPrompt | null;
 };
+
+type DialogPrompt = Extract<HumanPrompt, { kind: "dialog" }>;
 
 const OPEN_POLL_MS = 40;
 const SCREENCAST_QUALITY = 80;
@@ -148,6 +152,12 @@ export class ShellLink {
   async availArea(targetId: string): Promise<WindowBounds> {
     const { id } = await this.#page(targetId);
     return this.#evaluate(id, AVAIL_AREA);
+  }
+
+  async windowBounds(targetId: string): Promise<WindowBounds> {
+    const { windowId } = await this.#send("Browser.getWindowForTarget", { targetId });
+    const { bounds } = await this.#send("Browser.getWindowBounds", { windowId });
+    return { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
   }
 
   async placeWindow(targetId: string, bounds: WindowBounds): Promise<void> {
@@ -258,25 +268,22 @@ export class ShellLink {
     page.answering = undefined;
     if (!ask) {
       await this.#send("Page.setInterceptFileChooserDialog", { enabled: false }, page.id);
-      await this.#send("Page.disable", {}, page.id);
       return;
     }
-    const answering: Listener = (method, params) => {
-      if (method === "Page.javascriptDialogOpening" && DIALOG_TYPES.has(params.type)) {
-        void ask({
-          kind: "dialog",
-          type: params.type,
-          message: String(params.message ?? ""),
-          defaultPrompt: String(params.defaultPrompt ?? ""),
+    const answerDialog = (prompt: DialogPrompt) => {
+      void ask(prompt)
+        .then((answer) => {
+          if (answer.kind !== "dialog" || page.answering !== answering) return;
+          return this.#send("Page.handleJavaScriptDialog", {
+            accept: answer.accept,
+            ...(answer.promptText !== undefined ? { promptText: answer.promptText } : {}),
+          }, page.id);
         })
-          .then((answer) => {
-            if (answer.kind !== "dialog" || page.answering !== answering) return;
-            return this.#send("Page.handleJavaScriptDialog", {
-              accept: answer.accept,
-              ...(answer.promptText !== undefined ? { promptText: answer.promptText } : {}),
-            }, page.id);
-          })
-          .catch(() => {});
+        .catch(() => {});
+    };
+    const answering: Listener = (method, params) => {
+      if (method === "Page.javascriptDialogOpening" && page.dialog) {
+        answerDialog(page.dialog);
       } else if (method === "Page.fileChooserOpened") {
         void ask({ kind: "files", multiple: params.mode === "selectMultiple" })
           .then((answer) => {
@@ -292,7 +299,10 @@ export class ShellLink {
     };
     page.answering = answering;
     this.#listen(page.id, answering);
-    await this.#send("Page.enable", {}, page.id);
+    // A dialog that opened while an agent held the tab, or that the user left
+    // open when an agent took over, still blocks the page, and commands the
+    // page must run wait behind it: ask before sending any.
+    if (page.dialog) answerDialog(page.dialog);
     await this.#send("Page.setInterceptFileChooserDialog", { enabled: true }, page.id);
   }
 
@@ -411,8 +421,23 @@ export class ShellLink {
 
   async #openPage(targetId: string): Promise<PageSession> {
     const id = await this.#attach(targetId);
-    const page: PageSession = { id, frames: [], answering: undefined };
+    const page: PageSession = { id, frames: [], answering: undefined, dialog: null };
     this.#watchFrames(page, id);
+    this.#listen(id, (method, params) => {
+      if (method === "Page.javascriptDialogOpening") {
+        page.dialog = DIALOG_TYPES.has(params.type)
+          ? {
+              kind: "dialog",
+              type: params.type,
+              message: String(params.message ?? ""),
+              defaultPrompt: String(params.defaultPrompt ?? ""),
+            }
+          : null;
+      } else if (method === "Page.javascriptDialogClosed") {
+        page.dialog = null;
+      }
+    });
+    await this.#send("Page.enable", {}, id);
     return page;
   }
 

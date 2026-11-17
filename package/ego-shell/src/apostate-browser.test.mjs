@@ -369,6 +369,38 @@ test("a popup joins the space of the page that opened it", async (t) => {
   );
 });
 
+test("a popup in a window of its own is moved inside the persona's screen at the size it asked for", async (t) => {
+  const { chromium, browser } = await setup(t);
+  const space = await browser.createSpace("orders", "agent");
+  const [opener] = space.tabs();
+  const popup = chromium.openPage({
+    url: "https://pagamento.example/",
+    newWindow: true,
+    openerId: opener.targetId,
+    bounds: { left: 0, top: 0, width: 800, height: 600 },
+  });
+  const windowId = chromium.windowOf(popup);
+  await until(() => chromium.boundsOf(windowId).top >= 25, "the popup placed");
+  const bounds = chromium.boundsOf(windowId);
+  assert.deepEqual([bounds.width, bounds.height], [800, 600]);
+  assert.ok(bounds.left >= 0 && bounds.left + bounds.width <= 1920, JSON.stringify(bounds));
+  assert.ok(bounds.top + bounds.height <= 1080, JSON.stringify(bounds));
+});
+
+test("a popup already inside the screen is left where it is", async (t) => {
+  const { chromium, browser } = await setup(t);
+  const space = await browser.createSpace("orders", "agent");
+  const [opener] = space.tabs();
+  const popup = chromium.openPage({
+    newWindow: true,
+    openerId: opener.targetId,
+    bounds: { left: 300, top: 200, width: 500, height: 400 },
+  });
+  await until(() => space.tabs().length === 2, "the popup");
+  await delay(30);
+  assert.deepEqual(chromium.boundsOf(chromium.windowOf(popup)), { left: 300, top: 200, width: 500, height: 400, windowState: "normal" });
+});
+
 test("a window the user opens is a task space the user owns", async (t) => {
   const { chromium, host, browser } = await setup(t);
   const agentSpace = await browser.createSpace("orders", "agent");

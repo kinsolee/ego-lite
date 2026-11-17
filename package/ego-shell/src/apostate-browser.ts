@@ -5,7 +5,7 @@ import { MouseHighlight } from "./mouse-highlight.js";
 import type { Profile } from "./profile-store.js";
 import { describeProxy } from "./proxy-config.js";
 import type { Screen, ScreenSource } from "./screen.js";
-import { windowPlacement } from "./screen-geometry.js";
+import { windowPlacement, type WindowBounds } from "./screen-geometry.js";
 import { ShellLink, type HumanPrompt } from "./shell-link.js";
 import {
   TaskSpace,
@@ -633,13 +633,29 @@ export class ApostateBrowser {
     if (info.type !== "page" || info.subtype) return;
     // A page that asks for a sized popup gets a window of its own; the popup
     // still belongs with the page that opened it.
-    await this.#attach(
+    const tab = await this.#attach(
       info,
       (windowId) =>
         this.#tabs.get(info.openerId ?? "")?.space ??
         this.#windows.get(windowId) ??
         this.#adoptWindow(),
     );
+    void this.#keepOnScreen(tab).catch(() => {});
+  }
+
+  /**
+   * A headless window a page opened starts at 0,0, above the persona's
+   * available area, where no real window can be. Move it inside, keeping the
+   * size the page asked for.
+   */
+  async #keepOnScreen(tab: ApostateTab): Promise<void> {
+    const [avail, bounds] = await Promise.all([
+      this.link.availArea(tab.targetId),
+      this.link.windowBounds(tab.targetId),
+    ]);
+    if (insideOf(avail, bounds)) return;
+    const placed = windowPlacement(avail, bounds, tab.space.slot + 1);
+    await this.link.placeWindow(tab.targetId, placed);
   }
 
   /** A window with no known opener and no space is a task space of its own for the user. */
@@ -747,4 +763,13 @@ export class ApostateBrowser {
     }
     this.#host.remove(space);
   }
+}
+
+function insideOf(avail: WindowBounds, bounds: WindowBounds): boolean {
+  return (
+    bounds.left >= avail.left &&
+    bounds.top >= avail.top &&
+    bounds.left + bounds.width <= avail.left + avail.width &&
+    bounds.top + bounds.height <= avail.top + avail.height
+  );
 }
