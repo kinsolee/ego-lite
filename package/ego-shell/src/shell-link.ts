@@ -59,6 +59,8 @@ const SELECTED_TEXT = `(() => {
     let inner = null;
     try { inner = active && active.tagName === "IFRAME" ? active.contentDocument : null; } catch {}
     if (inner) { doc = inner; continue; }
+    // Chrome copies nothing out of a password field.
+    if (active && active.type === "password") return "";
     if (active && typeof active.value === "string" && typeof active.selectionStart === "number") {
       return active.value.slice(active.selectionStart, active.selectionEnd);
     }

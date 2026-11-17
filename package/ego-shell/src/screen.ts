@@ -1,5 +1,5 @@
 import { castSize, fit, toPage, type Fit, type Size } from "./screen-geometry.js";
-import { editCommand, parseScreenInput, translate, type ScreenInput } from "./screen-input.js";
+import { editCommand, parseScreenInput, translate, type InputCall, type ScreenInput } from "./screen-input.js";
 import type { Frame, HumanPrompt, PromptAnswer, ShellLink } from "./shell-link.js";
 import type { Owner } from "./task-space.js";
 
@@ -96,6 +96,8 @@ export class Screen {
   readonly #frames = new Map<string, Cached>();
   #inputs: Promise<void> = Promise.resolve();
   #swallowRelease = false;
+  /** Keys and buttons the human holds down in one tab, to release when input leaves it. */
+  #held: Held | null = null;
   readonly #prompts: Pending[] = [];
   /** The text each kernel's clipboard holds, as far as the shell knows. */
   readonly #kernelClipboard = new WeakMap<ScreenLink, string>();
@@ -106,6 +108,7 @@ export class Screen {
 
   /** The space is selected. Idempotent. */
   show(source: ScreenSource): void {
+    if (this.#source !== source) this.#releaseHeld();
     this.#source = source;
     this.#refresh();
   }
@@ -113,6 +116,7 @@ export class Screen {
   /** The space stopped being selected; ignored unless it is the one shown. */
   hide(source: ScreenSource): void {
     if (this.#source !== source) return;
+    this.#releaseHeld();
     this.#source = null;
     this.#refresh();
   }
@@ -120,7 +124,12 @@ export class Screen {
   /** The source's active tab or holder changed. */
   retarget(source: ScreenSource): void {
     if (source.ownership !== "user") this.#drop(source);
-    if (this.#source === source) this.#refresh();
+    if (this.#source === source) {
+      if (source.ownership !== "user" || source.shownTargetId() !== this.#held?.targetId) {
+        this.#releaseHeld();
+      }
+      this.#refresh();
+    }
   }
 
   /** The view's size in CSS pixels and its device scale. */
@@ -149,8 +158,13 @@ export class Screen {
     const targetId = source?.shownTargetId();
     const at = this.#fit;
     if (!source || !targetId || !at || source.ownership !== "user") return;
+    // Ownership and selection can change while earlier input is still on the wire.
+    const live = () =>
+      this.#source === source &&
+      source.ownership === "user" &&
+      source.shownTargetId() === targetId;
     this.#inputs = this.#inputs
-      .then(() => this.#forward(source.link, targetId, input, at))
+      .then(() => (live() ? this.#forward(source.link, targetId, input, at, live) : undefined))
       .catch(() => {});
   }
 
@@ -224,7 +238,23 @@ export class Screen {
     return seq;
   }
 
-  async #forward(link: ScreenLink, targetId: string, input: ScreenInput, at: Fit): Promise<void> {
+  async #forward(
+    link: ScreenLink,
+    targetId: string,
+    input: ScreenInput,
+    at: Fit,
+    live: () => boolean,
+  ): Promise<void> {
+    const press = pressOf(input);
+    if (press && input.kind !== "wheel" && input.kind !== "composition" && input.type === "up") {
+      // A release goes only where its press went.
+      const held = this.#held;
+      if (!held || held.link !== link || held.targetId !== targetId || !held.down.has(press)) {
+        if (input.kind === "mouse") this.#swallowRelease = false;
+        return;
+      }
+      held.down.delete(press);
+    }
     if (input.kind === "mouse" && input.button === "left") {
       if (input.type === "down") {
         const page = toPage(input.at, at);
@@ -240,6 +270,8 @@ export class Screen {
     const command = editCommand(input);
     if (command === "copy" || command === "cut") {
       const text = await link.selectedText(targetId).catch(() => "");
+      if (!live()) return;
+      this.#noteDown(link, targetId, input, press);
       await link.dispatch(targetId, translate(input, at));
       if (text) {
         this.#port.writeClipboard(text);
@@ -249,14 +281,48 @@ export class Screen {
     }
     // A kernel's own copy also holds the HTML a page pastes; the host copy is
     // text only, so it replaces the kernel's only when the host has moved on.
+    let calls = translate(input, at);
     if (command === "paste") {
       const text = await this.#port.readClipboard();
-      if (text && this.#kernelClipboard.get(link) !== text) {
+      if (!text) {
+        // The host holds an image or files, which a text field does not take,
+        // and Chromium cannot empty its clipboard: send the keys alone.
+        calls = calls.map(({ method, params }) => {
+          const { commands: _, ...rest } = params;
+          return { method, params: rest };
+        }) satisfies InputCall[];
+      } else if (this.#kernelClipboard.get(link) !== text) {
         await link.putClipboard(targetId, text).catch(() => {});
         this.#kernelClipboard.set(link, text);
       }
     }
-    await link.dispatch(targetId, translate(input, at));
+    if (!live()) return;
+    this.#noteDown(link, targetId, input, press);
+    await link.dispatch(targetId, calls);
+  }
+
+  #noteDown(link: ScreenLink, targetId: string, input: ScreenInput, press: string | null): void {
+    if (!press || input.kind === "wheel" || input.kind === "composition" || input.type !== "down") return;
+    if (this.#held?.link !== link || this.#held.targetId !== targetId) {
+      this.#releaseHeld();
+      this.#held = { link, targetId, at: this.#fit, down: new Map() };
+    }
+    this.#held.down.set(press, input);
+  }
+
+  /** Send the tab the human leaves a release for everything still held down in it. */
+  #releaseHeld(): void {
+    const held = this.#held;
+    this.#held = null;
+    this.#swallowRelease = false;
+    if (!held || held.down.size === 0 || !held.at) return;
+    const at = held.at;
+    const releases = [...held.down.values()].reverse().map(release);
+    this.#inputs = this.#inputs
+      .then(async () => {
+        for (const input of releases) await held.link.dispatch(held.targetId, translate(input, at));
+      })
+      .catch(() => {});
   }
 
   #shownPrompt(): Pending | undefined {
@@ -296,4 +362,25 @@ export class Screen {
       pending.reject(new Error("The space is no longer held by the user"));
     }
   }
+}
+
+type Held = {
+  link: ScreenLink;
+  targetId: string;
+  at: Fit | null;
+  down: Map<string, ScreenInput>;
+};
+
+/** What a down and its up have in common; null for input that is never held. */
+function pressOf(input: ScreenInput): string | null {
+  if (input.kind === "mouse" && input.type !== "move") return `mouse ${input.button}`;
+  if (input.kind === "key") return `key ${input.code || input.key}`;
+  return null;
+}
+
+/** The release of a held key or button. */
+function release(input: ScreenInput): ScreenInput {
+  if (input.kind === "mouse") return { ...input, type: "up", buttons: 0 };
+  if (input.kind === "key") return { ...input, type: "up", repeat: false, modifiers: 0 };
+  return input;
 }
