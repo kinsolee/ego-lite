@@ -89,6 +89,8 @@ export class Tab implements RoutedTab {
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
+        // An agent keeps working in a space the user is not looking at.
+        backgroundThrottling: false,
         // Read by the patched kernel to derive this profile's fingerprint noise.
         additionalArguments: [`--ego-fp-seed=${options.seed}`],
       },
@@ -197,7 +199,13 @@ export class Tab implements RoutedTab {
       // Keeping Chromium's own WebContents preserves `window.opener`, which
       // login and payment popups rely on.
       createWindow: (options) => {
-        const view = new WebContentsView(options);
+        const view = new WebContentsView({
+          ...options,
+          webPreferences: {
+            ...options.webPreferences,
+            backgroundThrottling: false,
+          },
+        });
         this.#events.popup(this, view);
         return view.webContents;
       },

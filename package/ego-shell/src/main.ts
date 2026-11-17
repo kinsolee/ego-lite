@@ -1,7 +1,13 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
+import {
+  app,
+  BaseWindow,
+  ipcMain,
+  WebContentsView,
+  type IpcMainInvokeEvent,
+} from "electron";
 
 import { AgentApi } from "./agent-api.js";
 import { ApostateBackend } from "./apostate-backend.js";
@@ -14,7 +20,13 @@ import {
 } from "./profile-store.js";
 import { KernelInstaller } from "./kernel-install.js";
 import { ElectronBackend } from "./spaces.js";
-import { TaskSpaces, type ChromeCommand } from "./task-space.js";
+import { TaskSpaces } from "./task-space.js";
+import {
+  parseCommandEnvelope,
+  parseLayout,
+  Workbench,
+  type WindowPort,
+} from "./workbench.js";
 
 const APP_ROOT = path.resolve(import.meta.dirname, "..");
 const UI_BASE = pathToFileURL(path.join(APP_ROOT, "ui")).href;
@@ -39,46 +51,78 @@ async function main(): Promise<void> {
     path.join(userData, "profiles.json"),
   );
   const runtime = new ProfileRuntime();
-  let manager: BrowserWindow | undefined;
-  const notifyManager = () => {
-    if (manager && !manager.isDestroyed()) {
-      manager.webContents.send("profiles:changed");
-    }
-  };
-  const spaces = new TaskSpaces(notifyManager);
-  const kernel = new KernelInstaller({
-    dataDir: userData,
-    onChange: () => {
-      if (manager && !manager.isDestroyed()) {
-        manager.webContents.send("kernel:changed");
-      }
+  let stopping = false;
+
+  const win = new BaseWindow({ width: 1440, height: 900, title: "ego shell" });
+  const ui = new WebContentsView({
+    webPreferences: {
+      preload: PRELOAD,
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
     },
   });
-  const electron = new ElectronBackend(runtime, spaces, APP_ROOT);
-  spaces.register("electron", electron);
+  win.contentView.addChildView(ui);
+  const fitUi = () => {
+    const { width, height } = win.getContentBounds();
+    ui.setBounds({ x: 0, y: 0, width, height });
+  };
+  fitUi();
+  win.on("resize", fitUi);
+  // Agents keep working in the spaces while the window is away.
+  win.on("close", (event) => {
+    if (process.platform !== "darwin" || stopping) return;
+    event.preventDefault();
+    win.hide();
+  });
+  win.on("closed", () => app.quit());
+
+  const sendUi = (channel: string, payload?: unknown) => {
+    if (!ui.webContents.isDestroyed()) ui.webContents.send(channel, payload);
+  };
+  // Tabs keep reporting while the app quits, after the window is gone.
+  const live = (action: () => void) => {
+    if (!win.isDestroyed()) action();
+  };
+  const port: WindowPort<WebContentsView> = {
+    add: (view) => live(() => win.contentView.addChildView(view)),
+    raise: (view) => live(() => win.contentView.addChildView(view)),
+    remove: (view) => live(() => win.contentView.removeChildView(view)),
+    setBounds: (view, rect) => view.setBounds(rect),
+    focus: (view) => {
+      if (!view.webContents.isDestroyed()) view.webContents.focus();
+    },
+    contentSize: () => win.getContentBounds(),
+    reveal: () =>
+      live(() => {
+        win.show();
+        win.focus();
+      }),
+  };
+  const spaces: TaskSpaces = new TaskSpaces(
+    () => {
+      workbench.changed();
+      sendUi("profiles:changed");
+    },
+    { stageFor: (spaceId) => workbench.stageFor(spaceId) },
+  );
+  const workbench = new Workbench({
+    window: port,
+    ui,
+    spaces,
+    push: (state) => sendUi("workbench:state", state),
+  });
+  ui.webContents.on("did-finish-load", () => workbench.changed());
+
+  const kernel = new KernelInstaller({
+    dataDir: userData,
+    onChange: () => sendUi("kernel:changed"),
+  });
+  spaces.register("electron", new ElectronBackend(runtime, spaces));
   spaces.register(
     "apostate",
     new ApostateBackend({ dataDir: userData, host: spaces }),
   );
-
-  const openManager = () => {
-    if (manager && !manager.isDestroyed()) {
-      manager.focus();
-      return;
-    }
-    manager = new BrowserWindow({
-      width: 980,
-      height: 720,
-      title: "ego shell",
-      webPreferences: {
-        preload: PRELOAD,
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-      },
-    });
-    void manager.loadFile(path.join(APP_ROOT, "ui", "manager.html"));
-  };
 
   /** Run a UI request, refusing callers that are not the shell's own pages. */
   const serve = (
@@ -115,16 +159,16 @@ async function main(): Promise<void> {
       ? await profiles.update(id, draft)
       : await profiles.create(draft);
     await spaces.update(profile);
-    notifyManager();
+    sendUi("profiles:changed");
     return redactProfile(profile);
   });
   serve("profiles:remove", async ({ id }) => {
     if (spaces.ofProfile(id).length > 0) {
-      throw new ProfileInputError("Close this profile's windows first");
+      throw new ProfileInputError("Close this profile's task spaces first");
     }
     await profiles.remove(id);
     await spaces.erase(id);
-    notifyManager();
+    sendUi("profiles:changed");
   });
   serve("profiles:stop", async ({ id }) => {
     await spaces.release(id);
@@ -138,9 +182,14 @@ async function main(): Promise<void> {
   serve("kernel:status", () => kernel.status());
   // The only place the shell reaches the network for itself.
   serve("kernel:install", () => kernel.install());
-  serve("space:command", async (command: ChromeCommand, event) => {
-    await electron.forChrome(event.sender)?.command(command);
+  serve("space:select", ({ spaceId }) => workbench.select(spaceId));
+  serve("space:close", ({ spaceId }) => spaces.get(spaceId)?.close());
+  // A button of a space that closed meanwhile does nothing.
+  serve("space:command", (payload) => {
+    const { spaceId, command } = parseCommandEnvelope(payload);
+    return spaces.get(spaceId)?.command(command);
   });
+  serve("workbench:layout", (payload) => workbench.layout(parseLayout(payload)));
 
   const server: AgentServer = await startAgentServer({
     endpointFile: path.join(userData, "agent-endpoint.json"),
@@ -152,10 +201,8 @@ async function main(): Promise<void> {
   });
   console.log(`ego-shell ready, agent endpoint on 127.0.0.1:${server.port}`);
 
-  app.on("second-instance", openManager);
-  app.on("activate", openManager);
-  app.on("window-all-closed", () => app.quit());
-  let stopping = false;
+  app.on("second-instance", () => workbench.reveal());
+  app.on("activate", () => workbench.reveal());
   app.on("before-quit", (event) => {
     if (stopping) return;
     stopping = true;
@@ -168,7 +215,7 @@ async function main(): Promise<void> {
     process.on(signal, () => app.quit());
   }
 
-  openManager();
+  void ui.webContents.loadFile(path.join(APP_ROOT, "ui", "workbench.html"));
 }
 
 main().catch((error) => {

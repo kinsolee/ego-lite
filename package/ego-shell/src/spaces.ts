@@ -1,7 +1,3 @@
-import path from "node:path";
-
-import { BrowserWindow, type WebContents } from "electron";
-
 import { ProfileUnusableError } from "./profile-network.js";
 import type { LiveProfile, ProfileRuntime } from "./profile-runtime.js";
 import type { Profile } from "./profile-store.js";
@@ -14,45 +10,32 @@ import {
   type SpaceHost,
   type SpaceState,
 } from "./task-space.js";
+import type { Stage } from "./workbench.js";
 
-export type UiFiles = { chromePage: string; preload: string };
-
-// Must match the toolbar height in ui/style.css.
-const TOOLBAR_HEIGHT = 84;
-
-/** A task space on the Electron kernel: a shell window with a tab strip. */
+/** A task space on the Electron kernel: tabs shown in the main window. */
 export class Space extends TaskSpace {
-  readonly window: BrowserWindow;
   readonly #live: LiveProfile;
+  readonly #stage: Stage;
+  readonly #host: SpaceHost;
+  readonly #onClose: () => void;
   readonly #tabs: Tab[] = [];
-  readonly #onChange: () => void;
   #active?: Tab;
+  #closed = false;
 
   constructor(
     id: number,
     name: string,
     createdBy: Owner,
     live: LiveProfile,
-    ui: UiFiles,
-    onChange: () => void,
+    stage: Stage,
+    host: SpaceHost,
+    onClose: () => void,
   ) {
     super(id, name, createdBy);
     this.#live = live;
-    this.#onChange = onChange;
-    this.window = new BrowserWindow({
-      width: 1280,
-      height: 860,
-      title: `${live.profile.name} · ${name}`,
-      webPreferences: {
-        preload: ui.preload,
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-      },
-    });
-    this.window.on("resize", () => this.#layout());
-    this.window.webContents.on("did-finish-load", () => this.publish());
-    void this.window.loadFile(ui.chromePage);
+    this.#stage = stage;
+    this.#host = host;
+    this.#onClose = onClose;
   }
 
   get profile(): Profile {
@@ -163,12 +146,11 @@ export class Space extends TaskSpace {
   }
 
   async close(): Promise<void> {
-    if (!this.window.isDestroyed()) this.window.destroy();
-  }
-
-  /** Called once the window is gone: nothing may touch it afterwards. */
-  dispose(): void {
+    if (this.#closed) return;
+    this.#closed = true;
     for (const tab of this.tabs()) tab.close();
+    this.#onClose();
+    this.#host.remove(this);
   }
 
   readonly #tabEvents: TabEvents = {
@@ -186,12 +168,12 @@ export class Space extends TaskSpace {
       if (index < 0) return;
       this.#tabs.splice(index, 1);
       for (const client of this.clients) client.tabDestroyed(tab);
-      if (this.window.isDestroyed()) return;
-      this.window.contentView.removeChildView(tab.view);
+      this.#stage.remove(tab.view);
       if (this.#active === tab) {
         this.#active = undefined;
         const next = this.#tabs[Math.min(index, this.#tabs.length - 1)];
         if (next) this.#activate(next);
+        else this.#stage.front(null);
       }
       this.publish();
     },
@@ -216,12 +198,12 @@ export class Space extends TaskSpace {
   }
 
   #adopt(tab: Tab): void {
-    if (this.window.isDestroyed()) {
+    if (this.#closed) {
       tab.close();
       return;
     }
     this.#tabs.push(tab);
-    this.window.contentView.addChildView(tab.view);
+    this.#stage.place(tab.view);
     this.#activate(tab);
     for (const client of this.clients) client.tabCreated(tab);
     this.publish();
@@ -229,20 +211,7 @@ export class Space extends TaskSpace {
 
   #activate(tab: Tab): void {
     this.#active = tab;
-    for (const other of this.#tabs) other.view.setVisible(other === tab);
-    this.#layout();
-    tab.webContents.focus();
-  }
-
-  #layout(): void {
-    if (this.window.isDestroyed() || !this.#active) return;
-    const { width, height } = this.window.getContentBounds();
-    this.#active.view.setBounds({
-      x: 0,
-      y: TOOLBAR_HEIGHT,
-      width,
-      height: Math.max(0, height - TOOLBAR_HEIGHT),
-    });
+    this.#stage.front(tab.view);
   }
 
   protected releaseAgentState(): void {
@@ -250,46 +219,35 @@ export class Space extends TaskSpace {
   }
 
   protected publish(): void {
-    if (this.window.isDestroyed()) return;
-    this.window.setTitle(`${this.profile.name} · ${this.name}`);
-    this.window.webContents.send("space:state", this.state());
-    this.#onChange();
+    if (!this.#closed) this.#host.changed();
   }
 }
 
-/** Runs profiles in Electron sessions and shows them in shell windows. */
+/** Runs profiles in Electron sessions and shows their tabs in the main window. */
 export class ElectronBackend implements KernelBackend {
   readonly #runtime: ProfileRuntime;
   readonly #host: SpaceHost;
-  readonly #ui: UiFiles;
   readonly #spaces = new Set<Space>();
 
-  constructor(runtime: ProfileRuntime, host: SpaceHost, appRoot: string) {
+  constructor(runtime: ProfileRuntime, host: SpaceHost) {
     this.#runtime = runtime;
     this.#host = host;
-    this.#ui = {
-      chromePage: path.join(appRoot, "ui", "chrome.html"),
-      preload: path.join(appRoot, "dist", "preload.cjs"),
-    };
   }
 
   async open(name: string, createdBy: Owner, profile: Profile): Promise<Space> {
     const live = await this.#runtime.start(profile);
-    const space = new Space(
-      this.#host.allocateId(),
+    const id = this.#host.allocateId();
+    const space: Space = new Space(
+      id,
       name,
       createdBy,
       live,
-      this.#ui,
-      () => this.#host.changed(),
+      this.#host.stageFor(id),
+      this.#host,
+      () => this.#spaces.delete(space),
     );
     this.#spaces.add(space);
     this.#host.add(space);
-    space.window.once("closed", () => {
-      this.#spaces.delete(space);
-      space.dispose();
-      this.#host.remove(space);
-    });
     await space.createTab("about:blank");
     return space;
   }
@@ -303,7 +261,7 @@ export class ElectronBackend implements KernelBackend {
     try {
       live = await this.#runtime.update(profile);
     } catch (error) {
-      // The runtime stopped the profile; its windows would browse on a session nobody manages.
+      // The runtime stopped the profile; its spaces would browse on a session nobody manages.
       if (error instanceof ProfileUnusableError) {
         await Promise.all(
           this.#ofProfile(profile.id).map((space) => space.close()),
@@ -329,13 +287,6 @@ export class ElectronBackend implements KernelBackend {
 
   stop(): Promise<void> {
     return this.#runtime.stop();
-  }
-
-  forChrome(contents: WebContents): Space | undefined {
-    return [...this.#spaces].find(
-      (space) =>
-        !space.window.isDestroyed() && space.window.webContents === contents,
-    );
   }
 
   #ofProfile(profileId: string): Space[] {

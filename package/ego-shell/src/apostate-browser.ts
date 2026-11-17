@@ -10,6 +10,7 @@ import {
   type SpaceState,
   type TaskTab,
 } from "./task-space.js";
+import type { Stage } from "./workbench.js";
 
 /**
  * Announces a tab's out-of-process frames. Nothing starts paused: the kernel
@@ -204,14 +205,22 @@ export class ApostateSpace extends TaskSpace {
   readonly #tabs: ApostateTab[] = [];
   #active: ApostateTab | undefined;
 
+  /** Until the main window can show it, the space lives in its own Apostate window. */
   constructor(
     id: number,
     name: string,
     createdBy: Owner,
     browser: ApostateBrowser,
+    stage: Stage,
   ) {
     super(id, name, createdBy);
     this.#browser = browser;
+    stage.front(null);
+    stage.onSelected((selected) => {
+      if (selected && this.#active) {
+        this.#browser.activate(this.#active).catch(() => {});
+      }
+    });
   }
 
   get profile(): Profile {
@@ -441,11 +450,13 @@ export class ApostateBrowser {
   /** Open a new window and make it a task space. */
   createSpace(name: string, createdBy: Owner): Promise<ApostateSpace> {
     return this.#serial(async () => {
+      const id = this.#host.allocateId();
       const space = new ApostateSpace(
-        this.#host.allocateId(),
+        id,
         name,
         createdBy,
         this,
+        this.#host.stageFor(id),
       );
       await this.#open({ url: "about:blank", newWindow: true }, () => space);
       this.#host.add(space);
@@ -579,11 +590,13 @@ export class ApostateBrowser {
 
   /** A window nobody asked the shell for is the user's own task space. */
   #adoptWindow(): ApostateSpace {
+    const id = this.#host.allocateId();
     const space = new ApostateSpace(
-      this.#host.allocateId(),
+      id,
       this.profile.name,
       "user",
       this,
+      this.#host.stageFor(id),
     );
     this.#host.add(space);
     return space;

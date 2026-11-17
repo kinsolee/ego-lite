@@ -8,9 +8,16 @@ const REQUESTS = new Set([
   "profiles:stop",
   "kernel:status",
   "kernel:install",
+  "space:select",
+  "space:close",
   "space:command",
+  "workbench:layout",
 ]);
-const EVENTS = new Set(["profiles:changed", "kernel:changed", "space:state"]);
+const EVENTS = new Set([
+  "profiles:changed",
+  "kernel:changed",
+  "workbench:state",
+]);
 
 contextBridge.exposeInMainWorld("shell", {
   request(channel: string, payload?: unknown): Promise<unknown> {

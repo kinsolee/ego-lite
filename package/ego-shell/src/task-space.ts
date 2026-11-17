@@ -1,5 +1,6 @@
 import { CdpClient, type RoutedSpace, type RoutedTab } from "./cdp-router.js";
 import type { Kernel, Profile } from "./profile-store.js";
+import type { Stage, Stages } from "./workbench.js";
 
 export type Owner = "agent" | "user";
 
@@ -176,7 +177,7 @@ export abstract class TaskSpace implements RoutedSpace {
 }
 
 /** Where a kernel registers the spaces it opens, whoever asked for them. */
-export interface SpaceHost {
+export interface SpaceHost extends Stages {
   allocateId(): number;
   add(space: TaskSpace): void;
   remove(space: TaskSpace): void;
@@ -202,10 +203,12 @@ export class TaskSpaces implements SpaceHost {
   readonly #spaces = new Map<number, TaskSpace>();
   readonly #backends = new Map<Kernel, KernelBackend>();
   readonly #onChange: () => void;
+  readonly #stages: Stages;
   #nextId = 1;
 
-  constructor(onChange: () => void) {
+  constructor(onChange: () => void, stages: Stages) {
     this.#onChange = onChange;
+    this.#stages = stages;
   }
 
   register(kernel: Kernel, backend: KernelBackend): void {
@@ -268,6 +271,11 @@ export class TaskSpaces implements SpaceHost {
 
   allocateId(): number {
     return this.#nextId++;
+  }
+
+  /** The space's place in the main window, for the kernel that opens it. */
+  stageFor(spaceId: number): Stage {
+    return this.#stages.stageFor(spaceId);
   }
 
   add(space: TaskSpace): void {

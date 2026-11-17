@@ -1,0 +1,92 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'"
+    />
+    <title>ego shell</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body class="workbench">
+    <aside class="sidebar">
+      <header>
+        <h1>Profiles</h1>
+        <button id="new-profile" type="button">New profile</button>
+      </header>
+      <div id="profiles" class="profiles"></div>
+      <div id="sidebar-error" class="error"></div>
+      <div class="kernel">
+        <span id="kernel-status" class="muted"></span>
+        <button id="kernel-install" type="button" hidden>
+          Install Apostate
+        </button>
+      </div>
+    </aside>
+    <main class="main">
+      <div id="chrome" class="chrome idle">
+        <div id="tabs" class="tabs"></div>
+        <div class="bar">
+          <button id="back" title="Back">←</button>
+          <button id="forward" title="Forward">→</button>
+          <button id="reload" title="Reload">⟳</button>
+          <form id="address-form">
+            <input id="address" spellcheck="false" />
+          </form>
+          <span id="space-profile" class="badge"></span>
+          <span id="owner" class="badge"></span>
+          <button id="take-control">Take control</button>
+        </div>
+      </div>
+      <div id="stage" class="stage">
+        <div class="empty">
+          <p id="empty-text" class="muted"></p>
+          <button id="empty-action" type="button" hidden></button>
+        </div>
+      </div>
+    </main>
+    <div id="editor" class="overlay" hidden>
+      <form id="profile-form" class="editor" autocomplete="off">
+        <h1 id="form-title">New profile</h1>
+        <label>Name <input name="name" required /></label>
+        <label
+          >Kernel
+          <select name="kernel">
+            <option value="electron">Built in</option>
+            <option value="apostate">Apostate (own fingerprint)</option>
+          </select>
+        </label>
+        <label
+          >Proxy
+          <select name="scheme">
+            <option value="none">No proxy</option>
+            <option value="socks5">SOCKS5</option>
+            <option value="http">HTTP</option>
+          </select>
+        </label>
+        <div class="row">
+          <label>Host <input name="host" /></label>
+          <label>Port <input name="port" inputmode="numeric" /></label>
+        </div>
+        <label>Username <input name="username" /></label>
+        <label
+          >Password
+          <input name="password" type="password" autocomplete="new-password" />
+        </label>
+        <label>Locale <input name="locale" placeholder="en-US" /></label>
+        <label>Timezone <input name="timezone" placeholder="UTC" /></label>
+        <label
+          >User agent
+          <input name="userAgent" placeholder="Default for this browser" />
+        </label>
+        <div id="form-error" class="error"></div>
+        <div class="buttons">
+          <button class="primary" type="submit">Save</button>
+          <button id="form-cancel" type="button">Cancel</button>
+        </div>
+      </form>
+    </div>
+    <script src="workbench.js"></script>
+  </body>
+</html>
