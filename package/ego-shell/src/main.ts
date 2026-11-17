@@ -110,6 +110,7 @@ async function main(): Promise<void> {
   let screenStatus: ScreenStatus = { spaceId: null, holder: null, prompt: null };
   const screen = new Screen({
     frame: (seq, jpeg, fit) => sendScreen("screen:frame", { seq, jpeg, fit }),
+    clear: () => sendScreen("screen:clear", null),
     status: (status) => {
       screenStatus = status;
       sendScreen("screen:status", status);

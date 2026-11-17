@@ -52,6 +52,11 @@ class FakePort {
   chooser = [];
   frame(seq, jpeg, fit) {
     this.frames.push({ seq, jpeg, fit });
+    this.shown.push(`frame ${String.fromCharCode(jpeg[0])}`);
+  }
+  shown = [];
+  clear() {
+    this.shown.push("clear");
   }
   status(status) {
     this.statuses.push(status);
@@ -99,6 +104,20 @@ test("showing a space casts its active tab at the view's device size", async () 
   await settle();
   assert.deepEqual(a.link.log, ["cast A1 1280x1200"]);
   assert.deepEqual(port.lastStatus, { spaceId: 1, holder: "user", prompt: null });
+});
+
+test("switching to a space with no frame yet blanks the view instead of keeping the old space's page", async () => {
+  const { port, screen } = setup();
+  const a = source(1, "A1");
+  const b = source(2, "B1");
+  screen.show(a);
+  await settle();
+  a.link.frame();
+  screen.show(b);
+  await settle();
+  assert.deepEqual(port.shown, ["clear", "frame A", "clear"]);
+  screen.hide(b);
+  assert.deepEqual(port.shown, ["clear", "frame A", "clear", "clear"]);
 });
 
 test("a frame is acknowledged only after the view drew it", async () => {

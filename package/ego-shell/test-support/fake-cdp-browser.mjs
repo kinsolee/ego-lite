@@ -31,6 +31,8 @@ export async function startFakeBrowser({ hang = [] } = {}) {
   const hits = new Map();
   /** Answers isolated-world evaluations the fake does not model itself. */
   const evaluations = [];
+  /** Run just before an isolated world's window.open makes its tab. */
+  const beforeOpen = [];
   /** targetId -> ids of in-process child frames, under the main frame */
   const childFrames = new Map();
   /** isolated world's executionContextId -> the frame it was made in */
@@ -172,6 +174,7 @@ export async function startFakeBrowser({ hang = [] } = {}) {
   function isolatedEvaluate(session, params) {
     const target = targets.get(session.targetId);
     if (params.expression.includes("window.open(")) {
+      for (const hook of beforeOpen) hook();
       addTarget({ windowId: target.windowId, openerId: session.targetId });
       return { result: { type: "undefined" } };
     }
@@ -283,6 +286,7 @@ export async function startFakeBrowser({ hang = [] } = {}) {
     failures,
     /** Answer isolated-world evaluations: `(expression, targetId, frameId) => value | undefined`. */
     evaluations,
+    beforeOpen,
     /** In-process child frames of a target's page, by frame id. */
     childFrames,
     /** Commands a session received, optionally only one method. */

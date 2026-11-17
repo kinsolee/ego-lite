@@ -85,6 +85,7 @@ const AVAIL_AREA =
 export class ShellLink {
   readonly closed: Promise<void>;
   readonly #connection: CdpConnection;
+  #opening: Promise<unknown> = Promise.resolve();
   readonly #pages = new Map<string, Promise<PageSession>>();
   readonly #listeners = new Map<ShellSessionId, Set<Listener>>();
 
@@ -114,19 +115,11 @@ export class ShellLink {
    * the new target once it has committed `url`.
    */
   async openIn(anchorTargetId: string, url: string): Promise<string> {
-    const before = new Set(await this.#targetIds());
-    const anchor = await this.#attach(anchorTargetId);
-    try {
-      const context = await this.#isolatedWorld(anchor);
-      await this.#send("Runtime.evaluate", {
-        contextId: context,
-        userGesture: true,
-        expression: "void window.open('', '_blank', 'noopener,noreferrer')",
-      }, anchor);
-    } finally {
-      this.#detach(anchor);
-    }
-    const targetId = await this.#newPage(before);
+    // One open at a time: the new tab is found by what appeared, and two at
+    // once could not be told apart.
+    const opening = this.#opening.then(() => this.#openBlank(anchorTargetId));
+    this.#opening = opening.catch(() => {});
+    const targetId = await opening;
     const session = await this.#attach(targetId);
     try {
       await this.#send("Page.enable", {}, session);
@@ -375,9 +368,29 @@ export class ShellLink {
       .map((info) => info.targetId);
   }
 
-  async #newPage(before: Set<string>): Promise<string> {
+  async #openBlank(anchorTargetId: string): Promise<string> {
+    const before = new Set(await this.#targetIds());
+    const anchor = await this.#attach(anchorTargetId);
+    try {
+      const context = await this.#isolatedWorld(anchor);
+      await this.#send("Runtime.evaluate", {
+        contextId: context,
+        userGesture: true,
+        expression: "void window.open('', '_blank', 'noopener,noreferrer')",
+      }, anchor);
+    } finally {
+      this.#detach(anchor);
+    }
+    return this.#newPage(before, anchorTargetId);
+  }
+
+  /** A page that appeared since `before`, opened by the anchor, not by some other page's popup. */
+  async #newPage(before: Set<string>, openerId: string): Promise<string> {
     for (let i = 0; i < 50; i++) {
-      const created = (await this.#targetIds()).find((id) => !before.has(id));
+      const { targetInfos } = await this.#send("Target.getTargets", {});
+      const created = (targetInfos as { targetId: string; type: string; openerId?: string }[]).find(
+        (info) => info.type === "page" && info.openerId === openerId && !before.has(info.targetId),
+      )?.targetId;
       if (created) return created;
       await new Promise((resolve) => setTimeout(resolve, OPEN_POLL_MS));
     }

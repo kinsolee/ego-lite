@@ -40,6 +40,27 @@ test("a new tab opens in the anchor's window with no opener and only its own his
   assert.ok(chromium.calls.some((call) => call.method === "Page.resetNavigationHistory" && call.sessionId === navigate.sessionId));
 });
 
+test("tabs opened at the same time are each their own", async (t) => {
+  const { chromium, link, page } = await setup(t);
+  const opened = await Promise.all([
+    link.openIn(page, "https://shop.example/one"),
+    link.openIn(page, "https://shop.example/two"),
+  ]);
+  assert.equal(new Set(opened).size, 2);
+  const urls = chromium.calls
+    .filter((call) => call.method === "Page.navigate")
+    .map((call) => [call.sessionId, call.params.url]);
+  assert.equal(new Set(urls.map(([session]) => session)).size, 2, "each tab navigated once, in its own session");
+});
+
+test("a page's own popup opening meanwhile is not taken for the shell's tab", async (t) => {
+  const { chromium, link, page } = await setup(t);
+  const other = chromium.openPage({ newWindow: true });
+  chromium.beforeOpen.push(() => chromium.openPage({ windowId: chromium.windowOf(other), openerId: other }));
+  const opened = await link.openIn(page, "https://shop.example/pedidos");
+  assert.equal(chromium.windowOf(opened), chromium.windowOf(page));
+});
+
 test("a window is read and placed through the link", async (t) => {
   const { chromium, link, page } = await setup(t);
   chromium.evaluations.push((expression) =>

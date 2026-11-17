@@ -6,6 +6,8 @@ import type { Owner } from "./task-space.js";
 /** What the Screen needs from the one screen view; main.ts adapts Electron to it. */
 export interface ScreenPort {
   frame(seq: number, jpeg: Uint8Array, at: Fit): void;
+  /** Blank the view, after any frame sent before. */
+  clear(): void;
   status(status: ScreenStatus): void;
   readClipboard(): Promise<string>;
   writeClipboard(text: string): unknown;
@@ -205,7 +207,9 @@ export class Screen {
     this.#inFlight = null;
     this.#fit = null;
     const cached = targetId === undefined ? undefined : this.#frames.get(targetId);
+    // Nothing of the space shown before may stay up under another.
     if (key && cached) this.#paint(cached);
+    else this.#port.clear();
     const previous = this.#stop;
     this.#stop = null;
     this.#transitions = this.#transitions.then(async () => {

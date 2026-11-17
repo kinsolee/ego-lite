@@ -24,7 +24,7 @@ class Link {
 
 class Port {
   clipboard = "";
-  frame() {} status() {}
+  frame() {} status() {} clear() {}
   async readClipboard() { return this.clipboard; }
   writeClipboard(text) { this.clipboard = text; }
   chooseFiles() { return new Promise(() => {}); }

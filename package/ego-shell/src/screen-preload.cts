@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld("shellScreen", {
   onFrame(listener: (frame: unknown) => void): void {
     ipcRenderer.on("screen:frame", (_event: unknown, frame: unknown) => listener(frame));
   },
+  onClear(listener: () => void): void {
+    ipcRenderer.on("screen:clear", () => listener());
+  },
   onStatus(listener: (status: unknown) => void): void {
     ipcRenderer.on("screen:status", (_event: unknown, status: unknown) => listener(status));
   },

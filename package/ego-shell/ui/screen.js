@@ -33,6 +33,14 @@ function reportSize() {
   bridge.resize({ width: window.innerWidth, height: window.innerHeight, dpr });
 }
 
+// Queued behind frames already decoding, so none of them lands after it.
+bridge.onClear(() => {
+  drawing = drawing.then(() => {
+    context.fillStyle = "#1d1d1f";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+  });
+});
+
 bridge.onFrame(({ seq, jpeg, fit }) => {
   drawing = drawing
     .then(async () => {
