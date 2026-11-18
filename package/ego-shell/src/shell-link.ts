@@ -256,7 +256,16 @@ export class ShellLink {
    * keys sent while it is open hang later mouse input; the focused select
    * still takes type-ahead keys.
    */
-  async focusSelectAt(targetId: string, x: number, y: number): Promise<boolean> {
+  /**
+   * `live` is asked again before the focus, the one write: the human may have
+   * lost the space while the node was looked up.
+   */
+  async focusSelectAt(
+    targetId: string,
+    x: number,
+    y: number,
+    live: () => boolean = () => true,
+  ): Promise<boolean> {
     const { id } = await this.#page(targetId);
     const { backendNodeId } = await this.#send("DOM.getNodeForLocation", {
       x: Math.round(x),
@@ -266,6 +275,7 @@ export class ShellLink {
     }, id);
     const { node } = await this.#send("DOM.describeNode", { backendNodeId }, id);
     if (node?.nodeName !== "SELECT") return false;
+    if (!live()) throw new Error("The space changed hands");
     await this.#send("DOM.focus", { backendNodeId }, id);
     return true;
   }
@@ -281,13 +291,21 @@ export class ShellLink {
     return typeof text === "string" ? text : "";
   }
 
-  /** Put host text on the kernel's clipboard, ahead of a Cmd+V. */
-  async putClipboard(targetId: string, text: string): Promise<void> {
+  /**
+   * Put host text on the kernel's clipboard, ahead of a Cmd+V. `live` is
+   * asked before each frame's write.
+   */
+  async putClipboard(
+    targetId: string,
+    text: string,
+    live: () => boolean = () => true,
+  ): Promise<void> {
     // The clipboard is the browser's, so any frame may write it; a frame whose
     // policy forbids it, such as a cross-origin iframe, hands over to the next.
     const { focused, frames } = await this.#frames(targetId);
     let refusal: unknown = new Error("The page has no frame");
     for (const { session, frameId } of [focused, ...frames.filter((frame) => frame !== focused)]) {
+      if (!live()) throw new Error("The space changed hands");
       try {
         await this.#evaluate(
           session,

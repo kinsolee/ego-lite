@@ -120,6 +120,33 @@ test("a press on a closed <select> focuses it instead of opening it", async (t) 
   assert.equal(chromium.sent(session, "Input.dispatchMouseEvent").length, 0);
 });
 
+test("a press that loses the space mid-lookup does not focus the <select>", async (t) => {
+  const { chromium, link, page } = await setup(t);
+  chromium.hits.set(page, () => "SELECT");
+  let held = true;
+  const lookup = link.focusSelectAt(page, 50, 10, () => held);
+  held = false;
+  await assert.rejects(lookup);
+  const [session] = chromium.sessionsOf(page);
+  assert.equal(chromium.sent(session, "DOM.focus").length, 0);
+});
+
+test("a paste that loses the space writes no frame's clipboard", async (t) => {
+  const { chromium, link, page } = await setup(t);
+  chromium.childFrames.set(page, ["F-shop"]);
+  const written = [];
+  chromium.evaluations.push((expression) => {
+    if (!expression.includes("clipboard.writeText")) return undefined;
+    written.push(expression);
+    throw new Error("Write permission denied.");
+  });
+  let held = true;
+  const put = link.putClipboard(page, "Olá", () => held);
+  held = false;
+  await assert.rejects(put);
+  assert.equal(written.length, 0);
+});
+
 test("the copied text and the pasted text pass through the focused frame's isolated world", async (t) => {
   const { chromium, link, page } = await setup(t);
   const written = [];

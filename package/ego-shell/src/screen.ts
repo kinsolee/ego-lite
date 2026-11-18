@@ -262,7 +262,7 @@ export class Screen {
     if (input.kind === "mouse" && input.button === "left") {
       if (input.type === "down") {
         const page = toPage(input.at, at);
-        if (page && (await link.focusSelectAt(targetId, page.x, page.y))) {
+        if (page && (await link.focusSelectAt(targetId, page.x, page.y, live))) {
           this.#swallowRelease = true;
           return;
         }
@@ -288,6 +288,7 @@ export class Screen {
     let calls = translate(input, at);
     if (command === "paste") {
       const text = await this.#port.readClipboard();
+      if (!live()) return;
       if (!text) {
         // The host holds an image or files, which a text field does not take,
         // and Chromium cannot empty its clipboard: send the keys alone.
@@ -297,7 +298,7 @@ export class Screen {
         }) satisfies InputCall[];
       } else if (this.#kernelClipboard.get(link) !== text) {
         try {
-          await link.putClipboard(targetId, text);
+          await link.putClipboard(targetId, text, live);
           this.#kernelClipboard.set(link, text);
         } catch {
           // No frame of the page may write the clipboard (Permissions-Policy),
