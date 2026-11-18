@@ -70,10 +70,9 @@ export function apostateArguments(launch: KernelLaunch): string[] {
     `--fingerprint-screen-height=${PERSONA.screen.height}`,
   ];
   if (launch.headless) {
-    args.push(
-      "--headless=new",
-      `--window-size=${PERSONA.window.width},${PERSONA.window.height}`,
-    );
+    // No --window-size: it sizes every new window, a page's popups too,
+    // whatever size the page asked for. The shell places its own windows.
+    args.push("--headless=new");
   }
   if (launch.proxyPort !== undefined) {
     args.push(

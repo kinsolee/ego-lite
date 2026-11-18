@@ -39,6 +39,12 @@ export async function startFakeBrowser({ hang = [] } = {}) {
   const worlds = new Map();
   /** socket -> { index, discovering } */
   const sockets = new Map();
+  /**
+   * The kernel's one display, as window placement sees it: 800x600 on a
+   * headless Mac until the shell sets it. Pages read the persona instead.
+   */
+  const display = { width: 800, height: 600, workAreaInsets: { top: 0, left: 0, bottom: 0, right: 0 } };
+  const persona = { left: 0, top: 0, width: 1920, height: 1080, availLeft: 0, availTop: 25, availWidth: 1920, availHeight: 1055 };
   let counter = 0;
   let lastWindow = 0;
   let activeWindow = 0;
@@ -160,6 +166,13 @@ export async function startFakeBrowser({ hang = [] } = {}) {
         const bounds = windows.get(params.windowId);
         if (!bounds) throw new Error("Browser window not found");
         return { bounds: { ...bounds } };
+      }
+      case "Emulation.getScreenInfos":
+        return { screenInfos: [{ ...persona, id: "1", isPrimary: true }] };
+      case "Emulation.updateScreen": {
+        if (params.screenId !== "1") throw new Error("Unknown screen id");
+        Object.assign(display, { width: params.width, height: params.height, workAreaInsets: { ...params.workAreaInsets } });
+        return { screenInfo: { ...persona, id: "1", isPrimary: true } };
       }
       case "Browser.getVersion":
         return { product: "Chrome/155.0.8059.31", protocolVersion: "1.3" };
@@ -317,6 +330,8 @@ export async function startFakeBrowser({ hang = [] } = {}) {
     },
     windowOf: (targetId) => targets.get(targetId)?.windowId,
     boundsOf: (windowId) => ({ ...windows.get(windowId) }),
+    /** The kernel's display as window placement sees it. */
+    display: () => structuredClone(display),
     targetIds: () => [...targets.keys()],
     /** A page the browser opened on its own: a popup, or the user's doing. */
     openPage(options = {}) {

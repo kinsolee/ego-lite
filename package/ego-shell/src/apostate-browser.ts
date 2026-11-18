@@ -471,10 +471,12 @@ export class ApostateBrowser {
       },
       options.commandTimeoutMs,
     );
-    let link: ShellLink;
+    let link: ShellLink | undefined;
     try {
       link = await ShellLink.connect(endpoint, options.commandTimeoutMs);
+      await link.matchScreens();
     } catch (error) {
+      link?.close();
       connection.close();
       throw error;
     }
@@ -640,22 +642,6 @@ export class ApostateBrowser {
         this.#windows.get(windowId) ??
         this.#adoptWindow(),
     );
-    void this.#keepOnScreen(tab).catch(() => {});
-  }
-
-  /**
-   * A headless window a page opened starts at 0,0, above the persona's
-   * available area, where no real window can be. Move it inside, keeping the
-   * size the page asked for.
-   */
-  async #keepOnScreen(tab: ApostateTab): Promise<void> {
-    const [avail, bounds] = await Promise.all([
-      this.link.availArea(tab.targetId),
-      this.link.windowBounds(tab.targetId),
-    ]);
-    if (insideOf(avail, bounds)) return;
-    const placed = windowPlacement(avail, bounds, tab.space.slot + 1);
-    await this.link.placeWindow(tab.targetId, placed);
   }
 
   /** A window with no known opener and no space is a task space of its own for the user. */
@@ -763,13 +749,4 @@ export class ApostateBrowser {
     }
     this.#host.remove(space);
   }
-}
-
-function insideOf(avail: WindowBounds, bounds: WindowBounds): boolean {
-  return (
-    bounds.left >= avail.left &&
-    bounds.top >= avail.top &&
-    bounds.left + bounds.width <= avail.left + avail.width &&
-    bounds.top + bounds.height <= avail.top + avail.height
-  );
 }

@@ -76,6 +76,18 @@ const SELECTED_TEXT = `(() => {
   }
 })()`;
 
+interface ScreenInfo {
+  id: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  availLeft: number;
+  availTop: number;
+  availWidth: number;
+  availHeight: number;
+}
+
 const AVAIL_AREA =
   "({left: screen.availLeft, top: screen.availTop, width: screen.availWidth, height: screen.availHeight})";
 
@@ -152,16 +164,35 @@ export class ShellLink {
     return { currentIndex, entryIds: entries.map((entry: { id: number }) => entry.id) };
   }
 
+  /**
+   * Give the kernel's own displays the geometry its pages read. A headless
+   * kernel on macOS builds one 800x600 display whatever the persona claims;
+   * pages read the persona, but Chromium places and sizes new windows on the
+   * display, so a page's popup was squeezed into 800x600 at 0,0. The screens
+   * listed here already carry the persona's values, so each is written back
+   * as it reads. Call it before any window opens: nothing is moved.
+   */
+  async matchScreens(): Promise<void> {
+    const { screenInfos } = await this.#send("Emulation.getScreenInfos", {});
+    for (const screen of screenInfos as ScreenInfo[]) {
+      await this.#send("Emulation.updateScreen", {
+        screenId: screen.id,
+        width: screen.width,
+        height: screen.height,
+        workAreaInsets: {
+          top: screen.availTop - screen.top,
+          left: screen.availLeft - screen.left,
+          bottom: screen.top + screen.height - screen.availTop - screen.availHeight,
+          right: screen.left + screen.width - screen.availLeft - screen.availWidth,
+        },
+      });
+    }
+  }
+
   /** `screen.avail*` as the page reads it. */
   async availArea(targetId: string): Promise<WindowBounds> {
     const { id } = await this.#page(targetId);
     return this.#evaluate(id, AVAIL_AREA);
-  }
-
-  async windowBounds(targetId: string): Promise<WindowBounds> {
-    const { windowId } = await this.#send("Browser.getWindowForTarget", { targetId });
-    const { bounds } = await this.#send("Browser.getWindowBounds", { windowId });
-    return { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
   }
 
   async placeWindow(targetId: string, bounds: WindowBounds): Promise<void> {

@@ -80,10 +80,10 @@ test("every kernel reports the persona's single 60 Hz screen, never the host's",
   assert.ok(!args.includes("--headless=new"), "a kernel opens windows unless asked not to");
 });
 
-test("a headless kernel opens its windows at the persona's window size", () => {
+test("a headless kernel leaves window sizes to the page and the shell", () => {
   const args = apostateArguments(launchOptions("/data/profile", { headless: true }));
   assert.ok(args.includes("--headless=new"));
-  assert.ok(args.includes("--window-size=1440,900"));
+  assert.ok(!args.some((arg) => arg.startsWith("--window-size")), "it would size a page's popups too");
 });
 
 test("a proxied profile only ever names the loopback relay", () => {

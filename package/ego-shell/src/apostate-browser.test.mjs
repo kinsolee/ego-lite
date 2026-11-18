@@ -369,25 +369,21 @@ test("a popup joins the space of the page that opened it", async (t) => {
   );
 });
 
-test("a popup in a window of its own is moved inside the persona's screen at the size it asked for", async (t) => {
+test("the kernel's display gets the screen its pages read before any window opens", async (t) => {
   const { chromium, browser } = await setup(t);
-  const space = await browser.createSpace("orders", "agent");
-  const [opener] = space.tabs();
-  const popup = chromium.openPage({
-    url: "https://pagamento.example/",
-    newWindow: true,
-    openerId: opener.targetId,
-    bounds: { left: 0, top: 0, width: 800, height: 600 },
+  assert.deepEqual(chromium.display(), {
+    width: 1920,
+    height: 1080,
+    workAreaInsets: { top: 25, left: 0, bottom: 0, right: 0 },
   });
-  const windowId = chromium.windowOf(popup);
-  await until(() => chromium.boundsOf(windowId).top >= 25, "the popup placed");
-  const bounds = chromium.boundsOf(windowId);
-  assert.deepEqual([bounds.width, bounds.height], [800, 600]);
-  assert.ok(bounds.left >= 0 && bounds.left + bounds.width <= 1920, JSON.stringify(bounds));
-  assert.ok(bounds.top + bounds.height <= 1080, JSON.stringify(bounds));
+  await browser.createSpace("orders", "agent");
+  const update = chromium.calls.findIndex((call) => call.method === "Emulation.updateScreen");
+  const firstWindow = chromium.calls.findIndex((call) => call.method === "Target.createTarget");
+  assert.ok(update >= 0 && update < firstWindow, "the display is set before the first window");
+  assert.ok(chromium.calls.every((call) => !call.method.startsWith("Emulation.") || !call.sessionId), "never on a page");
 });
 
-test("a popup already inside the screen is left where it is", async (t) => {
+test("the shell leaves a popup where its kernel put it", async (t) => {
   const { chromium, browser } = await setup(t);
   const space = await browser.createSpace("orders", "agent");
   const [opener] = space.tabs();
