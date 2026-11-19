@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'"
+    />
+    <title>ego shell screen</title>
+    <link rel="stylesheet" href="screen.css" />
+  </head>
+  <body>
+    <canvas id="frame"></canvas>
+    <textarea
+      id="ime"
+      autocomplete="off"
+      autocorrect="off"
+      autocapitalize="off"
+      spellcheck="false"
+      aria-hidden="true"
+    ></textarea>
+    <div id="agent" class="card" hidden>
+      <p>An agent is working in this space. You can watch; your input is not sent.</p>
+      <button id="take-control" type="button">Take control</button>
+    </div>
+    <form id="dialog" class="card" hidden>
+      <p id="dialog-message"></p>
+      <input id="dialog-input" spellcheck="false" />
+      <div class="buttons">
+        <button id="dialog-cancel" type="button">Cancel</button>
+        <button id="dialog-ok" type="submit">OK</button>
+      </div>
+    </form>
+    <script src="screen.js"></script>
+  </body>
+</html>

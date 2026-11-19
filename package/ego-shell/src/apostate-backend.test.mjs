@@ -116,6 +116,7 @@ test("spaces of one profile share one kernel process and its data directory", as
   assert.equal(second.ownership, "user");
   const { argv, tz } = await launched("br");
   assert.ok(argv.includes(`--user-data-dir=${userDataDir("br")}`));
+  assert.ok(argv.includes("--headless=new"), "no native windows; the shell draws the pages");
   assert.ok(argv.includes("--fingerprint=seed-one"));
   assert.ok(argv.includes("--fingerprint-locale=pt-BR"));
   assert.ok(argv.includes("--fingerprint-timezone=America/Recife"));

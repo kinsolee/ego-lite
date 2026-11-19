@@ -295,6 +295,48 @@ test("a space hears when it is selected, once on subscribing and again when pick
   assert.deepEqual(heard, [true, false, true, true]);
 });
 
+test("a selected space that closes hears that it is no longer selected", async () => {
+  const { workbench, openSpace, close } = setup();
+  const first = openSpace(1);
+  await tick();
+  workbench.select(1);
+  const heard = [];
+  first.stage.onSelected((selected) => heard.push(selected));
+  close(1);
+  await tick();
+  assert.deepEqual(heard, [true, false]);
+});
+
+test("a shared view is attached once, sized with the rest, and outlives any space that showed it", async () => {
+  const window = new FakeWindow();
+  const ui = view("ui");
+  const screen = view("screen");
+  const open = new Map();
+  const workbench = new Workbench({
+    window,
+    ui,
+    shared: [screen],
+    spaces: { list: () => [...open.values()], get: (id) => open.get(id) },
+    push() {},
+  });
+  assert.ok(window.children.includes(screen));
+  const space = { id: 1, createdBy: "user", ownership: "user", profile: { id: "br" }, state: () => ({}) };
+  open.set(1, space);
+  const stage = workbench.stageFor(1);
+  workbench.changed();
+  await tick();
+  stage.front(screen);
+  workbench.select(1);
+  assert.equal(window.top, screen);
+  workbench.layout({ rect: RECT, covered: false });
+  assert.deepEqual(window.bounds.get(screen), RECT);
+  open.delete(1);
+  workbench.changed();
+  await tick();
+  assert.ok(window.children.includes(screen), "still attached after the space closed");
+  assert.notEqual(window.top, screen);
+});
+
 test("reveal shows the window", () => {
   const { window, workbench } = setup();
   workbench.reveal();

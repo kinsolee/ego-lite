@@ -1,8 +1,12 @@
+import { PERSONA } from "./apostate-launcher.js";
 import { CdpConnection, type CdpEvent } from "./browser-cdp.js";
 import { type ChildTarget, type TargetInfo } from "./cdp-router.js";
 import { MouseHighlight } from "./mouse-highlight.js";
 import type { Profile } from "./profile-store.js";
 import { describeProxy } from "./proxy-config.js";
+import type { Screen, ScreenSource } from "./screen.js";
+import { windowPlacement, type WindowBounds } from "./screen-geometry.js";
+import { ShellLink, type HumanPrompt } from "./shell-link.js";
 import {
   TaskSpace,
   type Owner,
@@ -25,8 +29,11 @@ const FRAME_AUTO_ATTACH = {
 };
 
 const CLOSE_WAIT_MS = 3_000;
-/** A page held up by a dialog answers nothing; its visibility is then unknown. */
-const VISIBILITY_WAIT_MS = 1_000;
+/** How long a tab the shell opened may take to be announced on the routing socket. */
+const PLACE_WAIT_MS = 10_000;
+
+/** The one view every Apostate space is drawn into, and its controller. */
+export type ScreenHandle = { view: unknown; screen: Screen };
 
 /** What Chromium reports for a target; only the fields the shell reads. */
 type ChromiumTarget = TargetInfo & { subtype?: string };
@@ -123,28 +130,6 @@ class ApostateTab implements TaskTab {
     await this.#watchNested(this.#session);
   }
 
-  /** Whether the tab is the one its window shows; undefined when it cannot say. */
-  async visible(): Promise<boolean | undefined> {
-    let timer: NodeJS.Timeout | undefined;
-    const reply = await Promise.race([
-      this.#connection
-        .send(
-          "Runtime.evaluate",
-          { expression: "document.visibilityState", returnByValue: true },
-          this.#session,
-        )
-        .catch(() => undefined),
-      new Promise<undefined>((resolve) => {
-        timer = setTimeout(() => resolve(undefined), VISIBILITY_WAIT_MS);
-      }),
-    ]);
-    clearTimeout(timer);
-    const state = reply?.result?.value;
-    return state === "visible" || state === "hidden"
-      ? state === "visible"
-      : undefined;
-  }
-
   update(info: ChromiumTarget): void {
     this.#info = info;
   }
@@ -199,26 +184,37 @@ class ApostateTab implements TaskTab {
   }
 }
 
-/** A task space of an Apostate profile: the tabs of one browser window. */
-export class ApostateSpace extends TaskSpace {
+/**
+ * A task space of an Apostate profile: the tabs of one headless window, shown
+ * in the main window's screen view while it is selected.
+ */
+export class ApostateSpace extends TaskSpace implements ScreenSource {
+  /** Which cascade position its window took among the process's windows. */
+  readonly slot: number;
   readonly #browser: ApostateBrowser;
   readonly #tabs: ApostateTab[] = [];
   #active: ApostateTab | undefined;
+  #history = { canGoBack: false, canGoForward: false };
 
-  /** Until the main window can show it, the space lives in its own Apostate window. */
   constructor(
     id: number,
     name: string,
     createdBy: Owner,
     browser: ApostateBrowser,
     stage: Stage,
+    slot: number,
   ) {
     super(id, name, createdBy);
     this.#browser = browser;
-    stage.front(null);
+    this.slot = slot;
+    const shown = browser.screen;
     stage.onSelected((selected) => {
-      if (selected && this.#active) {
-        this.#browser.activate(this.#active).catch(() => {});
+      if (!shown) return;
+      if (selected) {
+        stage.front(shown.view);
+        shown.screen.show(this);
+      } else {
+        shown.screen.hide(this);
       }
     });
   }
@@ -227,32 +223,21 @@ export class ApostateSpace extends TaskSpace {
     return this.#browser.profile;
   }
 
+  get link(): ShellLink {
+    return this.#browser.link;
+  }
+
   tabs(): ApostateTab[] {
     return [...this.#tabs];
   }
 
-  /**
-   * The tab most recently opened or activated through the shell, or found
-   * shown by `syncActiveTab`.
-   */
+  /** The tab on screen. Only the shell decides it: no user picks a tab in a native strip. */
   activeTab(): ApostateTab | undefined {
     return this.#active;
   }
 
-  /**
-   * Chromium announces nothing when the user picks a tab in the tab strip, but
-   * only the tab a window shows is visible. When the window is minimised no
-   * tab is, and the last known one stays active.
-   */
-  override async syncActiveTab(): Promise<void> {
-    if (this.#tabs.length < 2) return;
-    const tabs = [...this.#tabs];
-    const states = await Promise.all(tabs.map((tab) => tab.visible()));
-    const shown = tabs.filter((_, index) => states[index] === true);
-    if (shown.length !== 1 || shown[0] === this.#active) return;
-    if (!this.#tabs.includes(shown[0]!)) return;
-    this.#active = shown[0];
-    this.publish();
+  shownTargetId(): string | undefined {
+    return this.#active?.targetId;
   }
 
   createTab(url: string): Promise<ApostateTab> {
@@ -265,10 +250,7 @@ export class ApostateSpace extends TaskSpace {
 
   async activateTab(targetId: string): Promise<void> {
     const tab = this.#tabs.find((candidate) => candidate.targetId === targetId);
-    if (!tab) return;
-    await this.#browser.activate(tab);
-    this.#active = tab;
-    this.publish();
+    if (tab) this.#setActive(tab);
   }
 
   override refreshTabs(): Promise<void> {
@@ -291,7 +273,6 @@ export class ApostateSpace extends TaskSpace {
     return this.#browser.closeSpace(this);
   }
 
-  /** Chromium does not say where a tab is in its history without being asked, so the arrows stay off. */
   state(): SpaceState {
     return {
       spaceId: this.id,
@@ -304,13 +285,12 @@ export class ApostateSpace extends TaskSpace {
         const { targetId, title, url } = tab.targetInfo();
         return { targetId, title, url, active: tab === this.#active, loading: false };
       }),
-      canGoBack: false,
-      canGoForward: false,
+      ...this.#history,
     };
   }
 
   protected async navigate(url: string): Promise<void> {
-    await this.#active?.sendOwn("Page.navigate", { url });
+    await this.#active?.sendOwn("Page.navigate", { url, transitionType: "typed" });
   }
 
   protected back(): Promise<void> {
@@ -328,43 +308,63 @@ export class ApostateSpace extends TaskSpace {
   async #step(offset: number): Promise<void> {
     const tab = this.#active;
     if (!tab) return;
-    const { currentIndex, entries } = (await tab.sendOwn(
-      "Page.getNavigationHistory",
-    )) as { currentIndex: number; entries: { id: number }[] };
-    const entry = entries[currentIndex + offset];
-    if (entry) {
-      await tab.sendOwn("Page.navigateToHistoryEntry", { entryId: entry.id });
+    const { currentIndex, entryIds } = await this.link.history(tab.targetId);
+    const entryId = entryIds[currentIndex + offset];
+    if (entryId !== undefined) {
+      await tab.sendOwn("Page.navigateToHistoryEntry", { entryId });
     }
+  }
+
+  /** Chromium does not announce where a tab is in its history, so the toolbar asks. */
+  async #refreshHistory(): Promise<void> {
+    const tab = this.#active;
+    const history = tab
+      ? await this.link.history(tab.targetId).then(
+          ({ currentIndex, entryIds }) => ({
+            canGoBack: currentIndex > 0,
+            canGoForward: currentIndex < entryIds.length - 1,
+          }),
+          () => undefined,
+        )
+      : { canGoBack: false, canGoForward: false };
+    if (!history || tab !== this.#active) return;
+    if (
+      history.canGoBack === this.#history.canGoBack &&
+      history.canGoForward === this.#history.canGoForward
+    ) {
+      return;
+    }
+    this.#history = history;
+    this.publish();
   }
 
   override setOwnership(owner: Owner): void {
     super.setOwnership(owner);
-    // The user takes over by working in the Apostate window itself.
-    if (owner === "user" && this.#active) {
-      this.#browser.activate(this.#active).catch(() => {});
-    }
+    for (const tab of this.#tabs) this.#answerFor(tab);
+    this.#browser.screen?.screen.retarget(this);
   }
 
-  /** A tab of this space's window appeared, opened by the shell, a page or the user. */
+  /** A tab of this space's window appeared, opened by the shell, an agent or a page. */
   adopt(tab: ApostateTab): void {
     this.#tabs.push(tab);
-    this.#active = tab;
     for (const client of this.clients) client.tabCreated(tab);
-    this.publish();
+    this.#answerFor(tab);
+    this.#setActive(tab);
   }
 
   forget(tab: ApostateTab): void {
     const index = this.#tabs.indexOf(tab);
     if (index < 0) return;
     this.#tabs.splice(index, 1);
-    if (this.#active === tab) this.#active = this.#tabs.at(-1);
     for (const client of this.clients) client.tabDestroyed(tab);
-    this.publish();
+    if (this.#active === tab) this.#setActive(this.#tabs.at(-1));
+    else this.publish();
   }
 
   tabChanged(tab: ApostateTab): void {
     for (const client of this.clients) client.tabChanged(tab);
     this.publish();
+    if (tab === this.#active) void this.#refreshHistory();
   }
 
   tabEvent(
@@ -390,6 +390,30 @@ export class ApostateSpace extends TaskSpace {
   protected publish(): void {
     this.#browser.changed();
   }
+
+  /**
+   * The single writer of the active tab. Chromium is told too, so the tab is
+   * the one visible page of its window, as in a window with a tab strip.
+   */
+  #setActive(tab: ApostateTab | undefined): void {
+    this.#active = tab;
+    if (tab) this.#browser.activate(tab).catch(() => {});
+    this.#history = { canGoBack: false, canGoForward: false };
+    this.publish();
+    void this.#refreshHistory();
+    this.#browser.screen?.screen.retarget(this);
+  }
+
+  /** While the user holds the space, the shell answers its dialogs and file choosers. */
+  #answerFor(tab: ApostateTab): void {
+    const shown = this.#browser.screen;
+    if (!shown) return;
+    const ask =
+      this.ownership === "user"
+        ? (prompt: HumanPrompt) => shown.screen.ask(this, prompt)
+        : null;
+    this.link.answerFor(tab.targetId, ask).catch(() => {});
+  }
 }
 
 /**
@@ -400,6 +424,9 @@ export class ApostateBrowser {
   profile: Profile;
   /** Settles when the browser socket is gone, which is when the process is. */
   readonly closed: Promise<void>;
+  /** The shell's own socket: the screen, the human's input, window placement. */
+  readonly link: ShellLink;
+  readonly screen: ScreenHandle | undefined;
   readonly #connection: CdpConnection;
   readonly #host: SpaceHost;
   readonly #tabs = new Map<string, ApostateTab>();
@@ -410,15 +437,21 @@ export class ApostateBrowser {
    * before Chromium's own announcement of it is looked at.
    */
   #queue: Promise<void> = Promise.resolve();
+  /** Tabs the shell opened, waiting for the routing socket to place them. */
+  readonly #awaited = new Map<string, () => void>();
 
   private constructor(
     connection: CdpConnection,
+    link: ShellLink,
     profile: Profile,
     host: SpaceHost,
+    screen: ScreenHandle | undefined,
   ) {
     this.#connection = connection;
+    this.link = link;
     this.profile = profile;
     this.#host = host;
+    this.screen = screen;
     this.closed = connection.closed.then(() => {
       for (const targetId of [...this.#tabs.keys()]) this.#drop(targetId);
     });
@@ -428,7 +461,7 @@ export class ApostateBrowser {
     endpoint: string,
     profile: Profile,
     host: SpaceHost,
-    commandTimeoutMs?: number,
+    options: { commandTimeoutMs?: number; screen?: ScreenHandle } = {},
   ): Promise<ApostateBrowser> {
     let browser: ApostateBrowser | undefined;
     const connection = await CdpConnection.connect(
@@ -436,9 +469,18 @@ export class ApostateBrowser {
       (event) => {
         if (browser) browser.#handle(event);
       },
-      commandTimeoutMs,
+      options.commandTimeoutMs,
     );
-    browser = new ApostateBrowser(connection, profile, host);
+    let link: ShellLink | undefined;
+    try {
+      link = await ShellLink.connect(endpoint, options.commandTimeoutMs);
+      await link.matchScreens();
+    } catch (error) {
+      link?.close();
+      connection.close();
+      throw error;
+    }
+    browser = new ApostateBrowser(connection, link, profile, host, options.screen);
     await connection.send("Target.setDiscoverTargets", { discover: true });
     return browser;
   }
@@ -447,7 +489,12 @@ export class ApostateBrowser {
     return [...new Set(this.#windows.values())];
   }
 
-  /** Open a new window and make it a task space. */
+  /**
+   * Open a new window and make it a task space. A headless window is still a
+   * window: its id decides which space a page's own popups join. It is placed
+   * inside the persona's screen, at a spot no other live window of the
+   * process holds, since a page reads where its window is.
+   */
   createSpace(name: string, createdBy: Owner): Promise<ApostateSpace> {
     return this.#serial(async () => {
       const id = this.#host.allocateId();
@@ -457,26 +504,32 @@ export class ApostateBrowser {
         createdBy,
         this,
         this.#host.stageFor(id),
+        this.#freeSlot(),
       );
-      await this.#open({ url: "about:blank", newWindow: true }, () => space);
+      const tab = await this.#open({ url: "about:blank", newWindow: true }, () => space);
+      const avail = await this.link.availArea(tab.targetId);
+      await this.link.placeWindow(
+        tab.targetId,
+        windowPlacement(avail, PERSONA.window, space.slot),
+      );
       this.#host.add(space);
       return space;
     });
   }
 
-  createTab(space: ApostateSpace, url: string): Promise<ApostateTab> {
-    return this.#serial(async () => {
-      const anchor = space.activeTab();
-      if (!anchor) throw new Error("The task space has no window");
-      // Chromium opens a tab in the window that was used last.
-      await this.activate(anchor);
-      return this.#open({ url }, (windowId) => {
-        if (this.#windows.get(windowId) !== space) {
-          throw new Error("The new tab opened outside its task space");
-        }
-        return space;
-      });
-    });
+  /**
+   * Open a tab in the space's own window through the shell's link, whichever
+   * window was used last, then wait for the routing socket to place it.
+   */
+  async createTab(space: ApostateSpace, url: string): Promise<ApostateTab> {
+    const anchor = space.activeTab();
+    if (!anchor) throw new Error("The task space has no window");
+    const targetId = await this.link.openIn(anchor.targetId, url);
+    const tab = await this.#placed(targetId);
+    if (tab.space !== space) {
+      throw new Error("The new tab opened outside its task space");
+    }
+    return tab;
   }
 
   closeTab(targetId: string): Promise<void> {
@@ -542,6 +595,7 @@ export class ApostateBrowser {
     ]);
     clearTimeout(timer);
     this.#connection.close();
+    this.link.close();
   }
 
   #handle({ method, params, sessionId }: CdpEvent): void {
@@ -569,7 +623,7 @@ export class ApostateBrowser {
     return run;
   }
 
-  /** A target Chromium announced: a page, a popup, or a window the user opened. */
+  /** A target Chromium announced: a tab the shell opened, a popup, or an unknown window. */
   async #track(info: ChromiumTarget): Promise<void> {
     const known = this.#tabs.get(info.targetId);
     if (known) {
@@ -579,16 +633,18 @@ export class ApostateBrowser {
     }
     // A prerendered page becomes a tab only once it replaces the one on screen.
     if (info.type !== "page" || info.subtype) return;
-    await this.#attach(
+    // A page that asks for a sized popup gets a window of its own; the popup
+    // still belongs with the page that opened it.
+    const tab = await this.#attach(
       info,
       (windowId) =>
-        this.#windows.get(windowId) ??
         this.#tabs.get(info.openerId ?? "")?.space ??
+        this.#windows.get(windowId) ??
         this.#adoptWindow(),
     );
   }
 
-  /** A window nobody asked the shell for is the user's own task space. */
+  /** A window with no known opener and no space is a task space of its own for the user. */
   #adoptWindow(): ApostateSpace {
     const id = this.#host.allocateId();
     const space = new ApostateSpace(
@@ -597,9 +653,37 @@ export class ApostateBrowser {
       "user",
       this,
       this.#host.stageFor(id),
+      this.#freeSlot(),
     );
     this.#host.add(space);
     return space;
+  }
+
+  /** The lowest cascade position no live space of this process holds. */
+  #freeSlot(): number {
+    const taken = new Set(this.spaces().map((space) => space.slot));
+    let slot = 0;
+    while (taken.has(slot)) slot += 1;
+    return slot;
+  }
+
+  /** The tab the shell opened, once the routing socket has placed it. */
+  #placed(targetId: string): Promise<ApostateTab> {
+    const found = this.#tabs.get(targetId);
+    if (found) return Promise.resolve(found);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#awaited.delete(targetId);
+        reject(new Error("The new tab was never announced"));
+      }, PLACE_WAIT_MS);
+      this.#awaited.set(targetId, () => {
+        clearTimeout(timer);
+        this.#awaited.delete(targetId);
+        const tab = this.#tabs.get(targetId);
+        if (tab) resolve(tab);
+        else reject(new Error("The new tab closed before it was placed"));
+      });
+    });
   }
 
   async #open(
@@ -644,9 +728,10 @@ export class ApostateBrowser {
       sessions: this.#sessions,
     });
     this.#tabs.set(targetId, tab);
-    this.#windows.set(windowId, space);
+    if (!this.#windows.has(windowId)) this.#windows.set(windowId, space);
     space.adopt(tab);
     await tab.watchFrames();
+    this.#awaited.get(targetId)?.();
     return tab;
   }
 
@@ -655,6 +740,7 @@ export class ApostateBrowser {
     if (!tab) return;
     this.#tabs.delete(targetId);
     tab.dispose();
+    this.link.forget(targetId);
     const { space } = tab;
     space.forget(tab);
     if (space.tabs().length > 0) return;

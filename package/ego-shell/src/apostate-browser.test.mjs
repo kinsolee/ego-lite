@@ -26,20 +26,25 @@ function fakeHost() {
   };
 }
 
-async function setup(t, { hang, commandTimeoutMs } = {}) {
+async function setup(t, { hang, commandTimeoutMs, screen } = {}) {
   const chromium = await startFakeBrowser({ hang });
   const host = fakeHost();
   const browser = await ApostateBrowser.connect(
     chromium.endpoint,
     PROFILE,
     host,
-    commandTimeoutMs,
+    { commandTimeoutMs, screen },
   );
   t.after(async () => {
     await browser.close();
     await chromium.close();
   });
   return { chromium, host, browser };
+}
+
+/** The session the mouse highlight opened for itself. */
+function overlaySessionOf(chromium) {
+  return chromium.calls.find((call) => call.method === "Overlay.enable").sessionId;
 }
 
 /** An agent connection to one space, speaking the dialect the harness expects. */
@@ -304,35 +309,6 @@ test("a title set after the page loaded is reported when tabs are read", async (
   assert.equal(tab.targetInfo().title, "Pedido enviado");
 });
 
-test("a tab the user picks in the tab strip becomes the active tab", async (t) => {
-  const { chromium, browser } = await setup(t);
-  const space = await browser.createSpace("orders", "user");
-  const [first] = space.tabs();
-  const second = await space.createTab("https://shop.example/");
-  assert.equal(space.activeTab(), second);
-
-  chromium.selectTab(first.targetId);
-  await space.syncActiveTab();
-  assert.equal(space.activeTab(), first);
-
-  chromium.minimise();
-  chromium.selectTab(second.targetId);
-  await space.syncActiveTab();
-  assert.equal(space.activeTab(), first, "a minimised window keeps its tab");
-});
-
-test("a page that cannot answer does not hold up the active tab", async (t) => {
-  const { chromium, browser } = await setup(t);
-  const space = await browser.createSpace("orders", "user");
-  const [first] = space.tabs();
-  const second = await space.createTab("https://shop.example/");
-  chromium.selectTab(first.targetId);
-  chromium.failures.set("Runtime.evaluate", "Execution context was destroyed.");
-
-  await space.syncActiveTab();
-  assert.equal(space.activeTab(), second);
-});
-
 test("the Browser commands the harness sends reach Apostate's browser session", async (t) => {
   const { chromium, browser } = await setup(t);
   const space = await browser.createSpace("orders", "agent");
@@ -391,6 +367,34 @@ test("a popup joins the space of the page that opened it", async (t) => {
       .map((event) => event.params.targetInfo.targetId),
     [opener.targetId, inTabStrip, inOwnWindow],
   );
+});
+
+test("the kernel's display gets the screen its pages read before any window opens", async (t) => {
+  const { chromium, browser } = await setup(t);
+  assert.deepEqual(chromium.display(), {
+    width: 1920,
+    height: 1080,
+    workAreaInsets: { top: 25, left: 0, bottom: 0, right: 0 },
+  });
+  await browser.createSpace("orders", "agent");
+  const update = chromium.calls.findIndex((call) => call.method === "Emulation.updateScreen");
+  const firstWindow = chromium.calls.findIndex((call) => call.method === "Target.createTarget");
+  assert.ok(update >= 0 && update < firstWindow, "the display is set before the first window");
+  assert.ok(chromium.calls.every((call) => !call.method.startsWith("Emulation.") || !call.sessionId), "never on a page");
+});
+
+test("the shell leaves a popup where its kernel put it", async (t) => {
+  const { chromium, browser } = await setup(t);
+  const space = await browser.createSpace("orders", "agent");
+  const [opener] = space.tabs();
+  const popup = chromium.openPage({
+    newWindow: true,
+    openerId: opener.targetId,
+    bounds: { left: 300, top: 200, width: 500, height: 400 },
+  });
+  await until(() => space.tabs().length === 2, "the popup");
+  await delay(30);
+  assert.deepEqual(chromium.boundsOf(chromium.windowOf(popup)), { left: 300, top: 200, width: 500, height: 400, windowState: "normal" });
 });
 
 test("a window the user opens is a task space the user owns", async (t) => {
@@ -497,7 +501,7 @@ test("the mouse highlight lands on the point asked for on a Retina screen", asyn
 
   await space.highlightMouse(200, 100);
 
-  const [, overlaySession] = chromium.sessionsOf(tab.targetId);
+  const overlaySession = overlaySessionOf(chromium);
   const [{ params }] = chromium.sent(overlaySession, "Overlay.highlightRect");
   assert.equal((params.x + params.width / 2) * 2, 200);
   assert.equal((params.y + params.height / 2) * 2, 100);
@@ -511,7 +515,7 @@ test("the mouse highlight is drawn by the browser on a session of its own", asyn
 
   await space.highlightMouse(200, 100);
 
-  const [, overlaySession] = chromium.sessionsOf(tab.targetId);
+  const overlaySession = overlaySessionOf(chromium);
   assert.deepEqual(
     chromium.sent(overlaySession).map((call) => call.method),
     [
@@ -549,33 +553,159 @@ test("the mouse highlight is drawn by the browser on a session of its own", asyn
     () => chromium.sent(overlaySession, "Overlay.hideHighlight").length === 2,
     "the highlight to fade",
   );
-  assert.equal(chromium.sessionsOf(tab.targetId).length, 2);
+  assert.equal(
+    chromium.calls.filter((call) => call.method === "Overlay.enable").length,
+    1,
+    "the highlight keeps its one session",
+  );
 });
 
-test("handing a space to the user fronts its window and frees its pages", async (t) => {
+test("the shell alone decides the active tab, and tells Chromium so the tab is its window's visible one", async (t) => {
+  const { chromium, browser } = await setup(t);
+  const space = await browser.createSpace("orders", "agent");
+  const [first] = space.tabs();
+  const second = await space.createTab("https://example.com/");
+  assert.equal(space.activeTab(), second);
+
+  await space.activateTab(first.targetId);
+  assert.equal(space.activeTab(), first);
+  await until(
+    () => chromium.calls.filter((call) => call.method === "Target.activateTarget").at(-1)?.params.targetId === first.targetId,
+    "Chromium to hear of it",
+  );
+
+  await space.closeTab(first.targetId);
+  assert.equal(space.activeTab(), second);
+});
+
+test("each space's headless window sits at its own spot inside the persona's screen", async (t) => {
+  const { chromium, browser } = await setup(t);
+  const spaces = [];
+  for (const name of ["a", "b", "c"]) spaces.push(await browser.createSpace(name, "agent"));
+  const bounds = spaces.map((space) => chromium.boundsOf(chromium.windowOf(space.tabs()[0].targetId)));
+  for (const each of bounds) {
+    assert.ok(each.left >= 0 && each.top >= 25, JSON.stringify(each));
+    assert.ok(each.left + each.width <= 1920 && each.top + each.height <= 1080, JSON.stringify(each));
+    assert.deepEqual([each.width, each.height], [1440, 900]);
+  }
+  assert.equal(new Set(bounds.map((each) => `${each.left},${each.top}`)).size, 3);
+
+  await spaces[0].close();
+  const reused = await browser.createSpace("d", "agent");
+  assert.equal(reused.slot, 0, "a closed space's spot is taken again");
+});
+
+test("an agent never hears the shell's screencast and cannot stop it", async (t) => {
   const { chromium, browser } = await setup(t);
   const space = await browser.createSpace("orders", "agent");
   const [tab] = space.tabs();
+  const agent = connect(space);
+  const { result } = await agent.call("Target.attachToTarget", { targetId: tab.targetId, flatten: true });
+  await agent.call("Page.enable", {}, result.sessionId);
+
+  const frames = [];
+  await browser.link.cast(tab.targetId, { maxWidth: 800, maxHeight: 600 }, (frame) => {
+    frames.push(frame);
+    frame.ack();
+  });
+  const shellSession = chromium.calls.find((call) => call.method === "Page.startScreencast").sessionId;
+  for (let i = 0; i < 3; i++) {
+    chromium.paint(tab.targetId);
+    await until(() => frames.length === i + 1, `frame ${i + 1}`);
+    await delay(5);
+  }
+  await agent.call("Page.stopScreencast", {}, result.sessionId);
+  assert.ok(chromium.castOf(shellSession), "the shell's cast runs on");
+  chromium.paint(tab.targetId);
+  await until(() => frames.length === 4, "a frame after the agent's stop");
+
+  assert.equal(agent.events("Page.screencastFrame").length, 0);
+  const sessionsSeen = new Set(agent.received.map((message) => message.sessionId).filter(Boolean));
+  assert.deepEqual([...sessionsSeen], [result.sessionId]);
+});
+
+test("a selected space is drawn into the shared screen view, and only while selected", async (t) => {
+  const shown = [];
+  const fronted = [];
+  const screen = {
+    show: (space) => shown.push(["show", space.id]),
+    hide: (space) => shown.push(["hide", space.id]),
+    retarget: (space) => shown.push(["retarget", space.id, space.shownTargetId()]),
+    ask: () => new Promise(() => {}),
+  };
+  const view = { name: "screen" };
+  const { browser, host } = await setup(t, { screen: { view, screen } });
+  let notify;
+  host.stageFor = () => ({
+    place() {},
+    remove() {},
+    front: (each) => fronted.push(each),
+    onSelected(listener) {
+      notify = listener;
+      listener(false);
+    },
+  });
+  const space = await browser.createSpace("orders", "user");
+  shown.length = 0;
+  notify(true);
+  notify(false);
+  assert.deepEqual(fronted, [view]);
+  assert.deepEqual(shown, [["show", space.id], ["hide", space.id]]);
+
+  const tab = await space.createTab("https://example.com/");
+  assert.deepEqual(shown.at(-1), ["retarget", space.id, tab.targetId]);
+});
+
+test("handing a space to the user frees its pages and lets the shell answer their dialogs", async (t) => {
+  const asked = [];
+  const screen = {
+    show() {},
+    hide() {},
+    retarget() {},
+    ask: async (space, prompt) => {
+      asked.push([space.id, prompt.kind]);
+      return { kind: "dialog", accept: true };
+    },
+  };
+  const { chromium, browser } = await setup(t, { screen: { view: {}, screen } });
+  const space = await browser.createSpace("orders", "agent");
+  const [tab] = space.tabs();
   const [pageSession] = chromium.sessionsOf(tab.targetId);
-  await browser.createSpace("mail", "agent");
   space.setAgentState("working");
+  const activations = chromium.calls.filter((call) => call.method === "Target.activateTarget").length;
+
+  chromium.dialog(tab.targetId, { type: "alert", message: "Oi" });
+  await delay(20);
+  assert.deepEqual(asked, [], "an agent's dialog is left to the agent");
 
   space.setOwnership("user");
   await until(
-    () =>
-      chromium.sent(pageSession, "Page.setInterceptFileChooserDialog").length >
-      0,
+    () => chromium.sent(pageSession, "Page.setInterceptFileChooserDialog").length > 0,
     "the pages to be released",
   );
-
+  const interceptions = () =>
+    chromium.calls
+      .filter((call) => call.method === "Page.setInterceptFileChooserDialog" && call.sessionId !== pageSession)
+      .map((call) => call.params.enabled);
+  await until(() => interceptions().at(-1) === true, "the shell to take the file chooser");
   assert.equal(space.ownership, "user");
   assert.equal(space.agentState, "");
-  assert.deepEqual(
-    chromium.calls
-      .filter((call) => call.method === "Target.activateTarget")
-      .map((call) => call.params.targetId),
-    [tab.targetId],
+  assert.equal(
+    chromium.calls.filter((call) => call.method === "Target.activateTarget").length,
+    activations,
+    "no native window to bring forward",
   );
+
+  chromium.dialog(tab.targetId, { type: "confirm", message: "Confirmar?" });
+  await until(() => asked.length === 1, "the human to be asked");
+  assert.deepEqual(asked, [[space.id, "dialog"]]);
+  await until(
+    () => chromium.calls.some((call) => call.method === "Page.handleJavaScriptDialog" && call.sessionId !== pageSession),
+    "the shell's answer",
+  );
+
+  space.setOwnership("agent");
+  await until(() => interceptions().at(-1) === false, "the shell to let go");
 });
 
 test("closing the browser asks Chromium to quit", async (t) => {
@@ -584,7 +714,10 @@ test("closing the browser asks Chromium to quit", async (t) => {
 
   await browser.close();
 
-  assert.equal(chromium.calls.at(-1).method, "Browser.close");
+  assert.equal(
+    chromium.calls.filter((call) => call.socket === 0).at(-1).method,
+    "Browser.close",
+  );
   assert.equal(host.spaces.size, 0);
 });
 
