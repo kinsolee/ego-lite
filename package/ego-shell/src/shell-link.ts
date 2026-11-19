@@ -244,10 +244,21 @@ export class ShellLink {
     };
   }
 
-  /** Send the calls in order; stops at the first failure. */
-  async dispatch(targetId: string, calls: readonly InputCall[]): Promise<void> {
+  /**
+   * Send the calls in order; stops at the first failure. `live` is asked
+   * before each call: the human may lose the space while the page is looked
+   * up or between two calls.
+   */
+  async dispatch(
+    targetId: string,
+    calls: readonly InputCall[],
+    live: () => boolean = () => true,
+  ): Promise<void> {
     const { id } = await this.#page(targetId);
-    for (const call of calls) await this.#send(call.method, call.params, id);
+    for (const call of calls) {
+      if (!live()) throw new Error("The space changed hands");
+      await this.#send(call.method, call.params, id);
+    }
   }
 
   /**
@@ -293,7 +304,7 @@ export class ShellLink {
 
   /**
    * Put host text on the kernel's clipboard, ahead of a Cmd+V. `live` is
-   * asked before each frame's write.
+   * asked right before each frame's write.
    */
   async putClipboard(
     targetId: string,
@@ -312,9 +323,11 @@ export class ShellLink {
           `navigator.clipboard.writeText(${JSON.stringify(text)}).then(() => "ok")`,
           { userGesture: true, awaitPromise: true },
           frameId,
+          live,
         );
         return;
       } catch (error) {
+        if (!live()) throw new Error("The space changed hands");
         refusal = error;
       }
     }
@@ -577,14 +590,19 @@ export class ShellLink {
     return executionContextId;
   }
 
-  /** Evaluate in a world of the shell's own, so the page sees nothing run. */
+  /**
+   * Evaluate in a world of the shell's own, so the page sees nothing run.
+   * `live` is asked once the world exists, right before the evaluation.
+   */
   async #evaluate(
     sessionId: ShellSessionId,
     expression: string,
     options: { userGesture?: boolean; awaitPromise?: boolean } = {},
     frameId?: string,
+    live: () => boolean = () => true,
   ): Promise<any> {
     const contextId = await this.#isolatedWorld(sessionId, frameId);
+    if (!live()) throw new Error("The space changed hands");
     const reply = await this.#send("Runtime.evaluate", {
       contextId,
       expression,

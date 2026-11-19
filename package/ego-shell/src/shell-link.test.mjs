@@ -147,6 +147,35 @@ test("a paste that loses the space writes no frame's clipboard", async (t) => {
   assert.equal(written.length, 0);
 });
 
+test("a paste that loses the space while its world is made writes no clipboard", async (t) => {
+  const { chromium, link, page } = await setup(t);
+  const written = [];
+  chromium.evaluations.push((expression) => {
+    if (expression.includes("clipboard.writeText")) written.push(expression);
+    return undefined;
+  });
+  // Finding the focused frame makes one world per frame; the next is the write's.
+  const count = (match) => chromium.calls.filter(match).length;
+  const worlds = () => count((call) => call.method === "Page.createIsolatedWorld");
+  const focusChecks = () => count((call) => call.method === "Runtime.evaluate" && call.params.expression === "document.hasFocus()");
+  await assert.rejects(link.putClipboard(page, "Olá", () => worlds() <= focusChecks()));
+  assert.equal(worlds(), focusChecks() + 1, "the write's world was made");
+  assert.equal(written.length, 0);
+});
+
+test("keys that lose the space part-way stop at the next call", async (t) => {
+  const { chromium, link, page } = await setup(t);
+  const sentInput = () => chromium.calls.filter((call) => call.method.startsWith("Input.")).length;
+  await assert.rejects(link.dispatch(page, [
+    { method: "Input.dispatchKeyEvent", params: { type: "rawKeyDown", key: "v" } },
+    { method: "Input.insertText", params: { text: "NEW" } },
+  ], () => sentInput() === 0));
+  assert.deepEqual(
+    chromium.calls.filter((call) => call.method.startsWith("Input.")).map((call) => call.method),
+    ["Input.dispatchKeyEvent"],
+  );
+});
+
 test("the copied text and the pasted text pass through the focused frame's isolated world", async (t) => {
   const { chromium, link, page } = await setup(t);
   const written = [];

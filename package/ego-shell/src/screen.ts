@@ -276,7 +276,7 @@ export class Screen {
       const text = await link.selectedText(targetId).catch(() => "");
       if (!live()) return;
       this.#noteDown(link, targetId, input, press);
-      await link.dispatch(targetId, translate(input, at));
+      await link.dispatch(targetId, translate(input, at), live);
       if (text) {
         this.#port.writeClipboard(text);
         this.#kernelClipboard.set(link, text);
@@ -315,7 +315,7 @@ export class Screen {
     }
     if (!live()) return;
     this.#noteDown(link, targetId, input, press);
-    await link.dispatch(targetId, calls);
+    await link.dispatch(targetId, calls, live);
   }
 
   #noteDown(link: ScreenLink, targetId: string, input: ScreenInput, press: string | null): void {
