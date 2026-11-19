@@ -275,8 +275,7 @@ export class Screen {
     if (command === "copy" || command === "cut") {
       const text = await link.selectedText(targetId).catch(() => "");
       if (!live()) return;
-      this.#noteDown(link, targetId, input, press);
-      await link.dispatch(targetId, translate(input, at), live);
+      await link.dispatch(targetId, translate(input, at), live, () => this.#noteDown(link, targetId, input, press));
       if (text) {
         this.#port.writeClipboard(text);
         this.#kernelClipboard.set(link, text);
@@ -314,8 +313,8 @@ export class Screen {
       }
     }
     if (!live()) return;
-    this.#noteDown(link, targetId, input, press);
-    await link.dispatch(targetId, calls, live);
+    // A press is held only once it is sent, so a gated one gets no release.
+    await link.dispatch(targetId, calls, live, () => this.#noteDown(link, targetId, input, press));
   }
 
   #noteDown(link: ScreenLink, targetId: string, input: ScreenInput, press: string | null): void {

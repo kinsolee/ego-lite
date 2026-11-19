@@ -13,8 +13,9 @@ class Link {
   frame() {
     this.onFrame({ jpeg: new Uint8Array([1]), viewport: { width: 1280, height: 800 }, pageScale: 1, ack() {} });
   }
-  async dispatch(targetId, calls) {
+  async dispatch(targetId, calls, live = () => true, sending = () => {}) {
     if (this.slow) await delay(this.slow);
+    if (calls.length > 0 && live()) sending();
     for (const call of calls) this.log.push(`${this.name}:${call.params.type}${call.params.commands ? "+" + call.params.commands : ""}`);
   }
   async focusSelectAt() { return false; }

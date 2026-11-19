@@ -247,16 +247,18 @@ export class ShellLink {
   /**
    * Send the calls in order; stops at the first failure. `live` is asked
    * before each call: the human may lose the space while the page is looked
-   * up or between two calls.
+   * up or between two calls. `sending` hears once, as the first call goes.
    */
   async dispatch(
     targetId: string,
     calls: readonly InputCall[],
     live: () => boolean = () => true,
+    sending: () => void = () => {},
   ): Promise<void> {
     const { id } = await this.#page(targetId);
-    for (const call of calls) {
+    for (const [index, call] of calls.entries()) {
       if (!live()) throw new Error("The space changed hands");
+      if (index === 0) sending();
       await this.#send(call.method, call.params, id);
     }
   }

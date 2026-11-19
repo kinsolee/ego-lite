@@ -25,8 +25,11 @@ class FakeLink {
     cast.onFrame({ jpeg: new Uint8Array([cast.targetId.charCodeAt(0)]), viewport, pageScale: 1, ack: () => cast.acks++ });
     return cast;
   }
-  async dispatch(targetId, calls) {
-    for (const call of calls) {
+  async dispatch(targetId, calls, live = () => true, sending = () => {}) {
+    if (this.lookup) await this.lookup();
+    for (const [index, call] of calls.entries()) {
+      if (!live()) throw new Error("The space changed hands");
+      if (index === 0) sending();
       this.dispatched.push({ targetId, ...call });
       this.log.push(`${call.method} ${call.params.type ?? call.params.text ?? ""}`.trim());
     }
@@ -201,6 +204,24 @@ test("input reaches the page only while the user holds the space, mapped to page
     a.link.dispatched.map((call) => [call.params.type, call.params.x, call.params.y]),
     [["mousePressed", 640, 400], ["mouseReleased", 640, 400]],
   );
+});
+
+test("a press the space is lost before sending gets no release either", async () => {
+  const { screen } = setup();
+  const a = source(1, "A1");
+  screen.show(a);
+  await settle();
+  a.link.frame();
+  let lookedUp;
+  a.link.lookup = () => new Promise((resolve) => (lookedUp = resolve));
+  screen.receive(mouse("down"));
+  await settle();
+  a.ownership = "agent";
+  screen.retarget(a);
+  a.link.lookup = undefined;
+  lookedUp();
+  await settle();
+  assert.equal(a.link.dispatched.length, 0, "neither the press nor a release for it reach the page");
 });
 
 test("nothing is forwarded before the first frame says where the page is", async () => {
